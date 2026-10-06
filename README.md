@@ -9,11 +9,11 @@ Node.js 20 이상이 필요합니다.
 
 ```sh
 npm install      # sql.js를 받아 app/vendor/로 복사
-npm run crawl    # 새번역 1189장을 내려받아 app/data/ 생성 (처음 한 번, 약 10분)
 npm start        # http://localhost:5173
 ```
 
-`npm run crawl`은 내려받은 HTML을 `.cache/saenew/`에 남겨 두므로, 다시 실행해도 사이트에 요청하지 않고 JSON만 다시 만듭니다.
+새번역 본문 데이터(`app/data/`)는 저장소에 들어 있습니다. 다시 만들려면 `npm run crawl`을 실행합니다(약 10분).
+내려받은 HTML은 `.cache/saenew/`에 남으므로, 다시 실행해도 사이트에 요청하지 않고 JSON만 다시 만듭니다.
 (`--build`: 캐시로 JSON만 생성, `--no-build`: 내려받기만)
 
 ```sh
@@ -25,7 +25,7 @@ npm run icons    # 앱 아이콘 다시 그리기
 
 서비스 워커(오프라인, 홈 화면 설치)는 `localhost`나 HTTPS에서만 동작합니다.
 `app/` 폴더가 그대로 배포할 정적 사이트이므로 GitHub Pages, Netlify, Cloudflare Pages 같은 HTTPS 정적 호스팅에 올린 뒤
-휴대폰 브라우저에서 "홈 화면에 추가"를 하면 됩니다. 단, 아래 저작권 안내를 먼저 확인하세요.
+휴대폰 브라우저에서 "홈 화면에 추가"를 하면 됩니다.
 
 ## 분량을 나누는 방법
 
@@ -59,7 +59,7 @@ app/                  배포할 정적 사이트 (PWA)
   js/db.js            SQLite 스키마와 질의
   js/bible.js         본문 불러오기, 구절 표기
   js/views/           화면 (오늘, 달력, 새 계획, 본문, 설정)
-  data/               크롤링 결과 (git에 넣지 않음)
+  data/               크롤링한 새번역 본문 (index.json + books/*.json)
 scripts/
   crawl.mjs           새번역 크롤러, lib/parse.mjs 파서
   serve.mjs           개발용 정적 서버
@@ -68,6 +68,4 @@ test/                 node:test 테스트
 
 ## 저작권
 
-새번역 본문의 저작권은 [대한성서공회](https://www.bskorea.or.kr)에 있습니다. 크롤링한 데이터는 개인 묵상 용도로만 쓰고,
-`app/data/`를 공개 저장소에 올리거나 누구나 접속할 수 있는 곳에 배포하려면 대한성서공회의 허락을 받아야 합니다.
-그래서 `app/data/`는 `.gitignore`에 들어 있습니다.
+새번역 본문의 저작권은 [대한성서공회](https://www.bskorea.or.kr)에 있습니다. 개인 묵상 용도로만 사용하세요.
