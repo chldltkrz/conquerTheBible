@@ -4,6 +4,7 @@ import {
   allBooks,
   book,
   chapterChars,
+  chapterUnit,
   describeSelection,
   formatSegments,
   getIndex,
@@ -15,7 +16,7 @@ import {
 } from '../bible.js';
 import { addMonths, daysInMonth, formatMonth, today, weekday, WEEKDAYS, ymKey } from '../dates.js';
 import { getPlan, savePlan } from '../db.js';
-import { buildPlan } from '../planner.js';
+import { buildParallelPlan, buildPlan } from '../planner.js';
 import { confirmDialog, formatNumber, html, setHTML, toast } from '../ui.js';
 import { accountPrefix } from './common.js';
 
@@ -27,8 +28,9 @@ export async function newPlanView(root, [y, m]) {
     sel: new Map(), // code → Set(장)
     split: true,
     open: null, // 장 목록을 펼친 책
+    mode: 'sequential', // 'sequential' 이어서 읽기 | 'parallel' 책마다 따로(병렬) 읽기
     step: 'select',
-    days: null,
+    tracks: null, // 미리보기: [{title, days}]
     title: '',
     titleEdited: false, // 사용자가 계획 이름을 직접 고쳤는지
   };
@@ -39,7 +41,10 @@ export async function newPlanView(root, [y, m]) {
     state.sel = new Map(
       Object.entries(existing?.selection ?? {}).map(([code, chs]) => [code, new Set(chs)]),
     );
-    if (existing) state.split = existing.splitChapters;
+    if (existing) {
+      state.split = existing.splitChapters;
+      state.mode = existing.mode;
+    }
     return existing;
   };
   loadExisting();
@@ -99,6 +104,7 @@ export async function newPlanView(root, [y, m]) {
     const chars = chapters.reduce((s, x) => s + chapterChars(x.b, x.c), 0);
     const existing = getPlan(state.y, state.m);
     const books = allBooks();
+    const bookCount = new Set(chapters.map((x) => x.b)).size;
     const testament = (t, label) => {
       const list = books.filter((b) => b.testament === t);
       const allOn = list.every(isFull);
@@ -133,6 +139,19 @@ export async function newPlanView(root, [y, m]) {
             )}
           </div>
         </section>
+        <section class="block">
+          <h2 class="block-title">읽는 방식</h2>
+          <div class="segmented mode-tabs" role="radiogroup" aria-label="읽는 방식">
+            <button role="radio" data-mode="sequential" aria-checked="${state.mode === 'sequential'}">이어서 읽기</button>
+            <button role="radio" data-mode="parallel" aria-checked="${state.mode === 'parallel'}">병렬로 읽기</button>
+          </div>
+          <p class="mode-help">${state.mode === 'parallel'
+            ? '고른 책마다 따로 한 달에 나눕니다. 날마다 책마다 조금씩 함께 읽고, 진도도 책마다 따로 봅니다.'
+            : '고른 책을 성경 순서대로 이어 붙여 한 달에 나눕니다.'}</p>
+          ${state.mode === 'parallel' && bookCount > 6
+            ? html`<p class="notice">${bookCount}권을 병렬로 읽으면 날마다 ${bookCount}군데를 읽게 됩니다.</p>`
+            : ''}
+        </section>
         ${testament('OT', '구약')} ${testament('NT', '신약')}
         <label class="option">
           <input type="checkbox" id="split" ${state.split ? 'checked' : ''} />
@@ -142,7 +161,7 @@ export async function newPlanView(root, [y, m]) {
         <div class="summary-bar">
           <div class="summary-text">
             ${chapters.length
-              ? html`<b>${formatNumber(chapters.length)}장</b> 선택 · 하루 평균 약 ${readingMinutes(chars / days)}분`
+              ? html`<b>${formatNumber(chapters.length)}장</b>${state.mode === 'parallel' ? ` · ${bookCount}권 병렬` : ' 선택'} · 하루 평균 약 ${readingMinutes(chars / days)}분`
               : html`<span class="muted">읽을 범위를 골라 주세요</span>`}
           </div>
           ${chapters.length ? html`<button class="btn btn-ghost btn-sm" data-action="clear">초기화</button>` : ''}
@@ -153,10 +172,17 @@ export async function newPlanView(root, [y, m]) {
 
   // ── 2단계: 미리보기 ──────────────────────────────────────
   const renderPreview = () => {
-    const minutes = state.days.filter((d) => d.segments.length).map((d) => readingMinutes(d.chars));
+    const monthDays = daysInMonth(state.y, state.m);
+    // 날마다 모든 묶음을 합친 분량
+    const days = Array.from({ length: monthDays }, (_, i) => {
+      const parts = state.tracks.map((t) => t.days[i]).filter((x) => x.segments.length);
+      return { parts, chars: parts.reduce((a, p) => a + p.chars, 0) };
+    });
+    const minutes = days.filter((d) => d.parts.length).map((d) => readingMinutes(d.chars));
     const [lo, hi] = [Math.min(...minutes), Math.max(...minutes)];
-    const total = state.days.reduce((s, d) => s + d.chars, 0);
+    const total = days.reduce((s, d) => s + d.chars, 0);
     const chapters = selectionToChapters(selectionObject()).length;
+    const parallel = state.mode === 'parallel';
     setHTML(
       root,
       html`<header class="page-head month-head">
@@ -173,18 +199,29 @@ export async function newPlanView(root, [y, m]) {
             ? `하루 약 ${lo}분`
             : `하루 약 ${lo}–${hi}분 (평균 ${readingMinutes(total / minutes.length)}분)`}</span>
         </div>
+        ${parallel
+          ? html`<ul class="track-summary">
+              ${state.tracks.map((t) => {
+                const sum = t.days.reduce((a, d) => a + d.chars, 0);
+                const n = new Set(t.days.flatMap((d) => d.segments.map((x) => x.c))).size;
+                return html`<li><b>${t.title}</b><span>${n}${chapterUnit(t.b)} · 하루 약 ${readingMinutes(sum / monthDays)}분</span></li>`;
+              })}
+            </ul>`
+          : ''}
         <label class="field">
           <span>계획 이름</span>
           <input id="plan-title" value="${state.title}" maxlength="40" autocomplete="off" />
         </label>
         <ul class="day-list is-preview">
-          ${state.days.map((d, i) => {
+          ${days.map((d, i) => {
             const wd = weekday(state.y, state.m, i + 1);
-            return html`<li class="day-row ${d.segments.length ? '' : 'is-rest'}">
+            return html`<li class="day-row ${d.parts.length ? '' : 'is-rest'}">
               <span class="day-link">
                 <span class="day-date ${wd === 0 ? 'sun' : wd === 6 ? 'sat' : ''}"><b>${i + 1}</b><small>${WEEKDAYS[wd]}</small></span>
-                <span class="day-ref">${d.segments.length ? formatSegments(d.segments) : '쉬는 날'}</span>
-                ${d.segments.length ? html`<span class="day-min">${readingMinutes(d.chars)}분</span>` : ''}
+                <span class="day-ref">${d.parts.length
+                  ? d.parts.map((p) => html`<span class="ref-line">${formatSegments(p.segments)}</span>`)
+                  : '쉬는 날'}</span>
+                ${d.parts.length ? html`<span class="day-min">${readingMinutes(d.chars)}분</span>` : ''}
               </span>
             </li>`;
           })}
@@ -228,14 +265,17 @@ export async function newPlanView(root, [y, m]) {
       if (!ok) return;
     }
     const sel = selectionObject();
+    const title = state.title.trim() || describeSelection(sel);
     try {
       await savePlan({
         year: state.y,
         month: state.m,
-        title: state.title.trim() || describeSelection(sel),
+        title,
         selection: sel,
         splitChapters: state.split,
-        days: state.days,
+        mode: state.mode,
+        // 이어서 읽기는 묶음 하나, 그 이름은 계획 이름
+        tracks: state.tracks.map((t) => ({ title: state.mode === 'parallel' ? t.title : title, days: t.days })),
       });
     } catch (err) {
       toast(`저장하지 못했습니다: ${err.message}`);
@@ -252,6 +292,11 @@ export async function newPlanView(root, [y, m]) {
     if (!t) return;
     const d = t.dataset;
     if (d.month) return changeMonth(Number(d.month));
+    if (d.mode) {
+      state.mode = d.mode;
+      render();
+      return;
+    }
     if (d.preset) {
       const books = presetBooks(PRESETS[d.preset]);
       const on = !books.every(isFull);
@@ -278,9 +323,13 @@ export async function newPlanView(root, [y, m]) {
       state.sel.clear();
     } else if (d.action === 'preview') {
       const sel = selectionObject();
-      state.days = buildPlan(getIndex(), selectionToChapters(sel), daysInMonth(state.y, state.m), {
-        splitChapters: state.split,
-      });
+      const chapters = selectionToChapters(sel);
+      const monthDays = daysInMonth(state.y, state.m);
+      const opts = { splitChapters: state.split };
+      state.tracks =
+        state.mode === 'parallel'
+          ? buildParallelPlan(getIndex(), chapters, monthDays, opts).map((t) => ({ b: t.b, title: book(t.b).name, days: t.days }))
+          : [{ title: '', days: buildPlan(getIndex(), chapters, monthDays, opts) }];
       if (!state.titleEdited) state.title = describeSelection(sel);
       state.step = 'preview';
       window.scrollTo(0, 0);
@@ -327,7 +376,7 @@ export async function newPlanView(root, [y, m]) {
 /** 다시 그린 뒤 같은 버튼을 찾기 위한 선택자 */
 function focusSelector(el) {
   if (!el || el === document.body) return null;
-  for (const attr of ['data-ch', 'data-toggle-book', 'data-open', 'data-preset', 'data-testament', 'data-month']) {
+  for (const attr of ['data-ch', 'data-toggle-book', 'data-open', 'data-preset', 'data-testament', 'data-month', 'data-mode']) {
     const v = el.getAttribute?.(attr);
     if (v != null) return `[${attr}="${CSS.escape(v)}"]`;
   }

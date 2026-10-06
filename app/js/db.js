@@ -88,7 +88,57 @@ export const MIGRATIONS = [
   );
   CREATE INDEX saved_verses_by_verse ON saved_verses (account_id, book, chapter, verse);
   `,
+  // v3: 병렬 읽기. 계획 안에 묶음(track)을 두고 묶음마다 따로 나누고 따로 읽음 표시한다.
+  //     이어서 읽기 계획은 묶음이 하나(track 0)뿐인 계획이다.
+  `
+  ALTER TABLE plans ADD COLUMN mode TEXT NOT NULL DEFAULT 'sequential'; -- 'sequential' | 'parallel'
+
+  CREATE TABLE plan_tracks (
+    plan_id     INTEGER NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    track       INTEGER NOT NULL,
+    title       TEXT    NOT NULL,              -- 병렬 읽기에서는 책 이름
+    total_chars INTEGER NOT NULL,
+    PRIMARY KEY (plan_id, track)
+  );
+  INSERT INTO plan_tracks (plan_id, track, title, total_chars) SELECT id, 0, title, total_chars FROM plans;
+
+  CREATE TABLE plan_days_v3 (
+    plan_id  INTEGER NOT NULL,
+    track    INTEGER NOT NULL,
+    day      INTEGER NOT NULL CHECK (day BETWEEN 1 AND 31),
+    segments TEXT    NOT NULL,
+    chars    INTEGER NOT NULL,
+    PRIMARY KEY (plan_id, track, day),
+    FOREIGN KEY (plan_id, track) REFERENCES plan_tracks(plan_id, track) ON DELETE CASCADE
+  );
+  INSERT INTO plan_days_v3 (plan_id, track, day, segments, chars) SELECT plan_id, 0, day, segments, chars FROM plan_days;
+
+  CREATE TABLE readings_v3 (
+    plan_id INTEGER NOT NULL,
+    track   INTEGER NOT NULL,
+    day     INTEGER NOT NULL,
+    read_at TEXT    NOT NULL,
+    PRIMARY KEY (plan_id, track, day),
+    FOREIGN KEY (plan_id, track, day) REFERENCES plan_days(plan_id, track, day) ON DELETE CASCADE
+  );
+  INSERT INTO readings_v3 (plan_id, track, day, read_at) SELECT plan_id, 0, day, read_at FROM readings;
+
+  DROP TABLE readings;
+  DROP TABLE plan_days;
+  ALTER TABLE plan_days_v3 RENAME TO plan_days;
+  ALTER TABLE readings_v3 RENAME TO readings;
+  `,
 ];
+
+// 날짜별 상태: 분량이 있는 묶음 수(parts)와 그중 읽은 수(done). 둘이 같으면 그날을 다 읽은 것이다.
+const DAY_STATUS = `
+  day_status AS (
+    SELECT d.plan_id, d.day, COUNT(*) AS parts, COUNT(r.read_at) AS done
+      FROM plan_days d
+      LEFT JOIN readings r ON r.plan_id = d.plan_id AND r.track = d.track AND r.day = d.day
+     WHERE d.segments <> '[]'
+     GROUP BY d.plan_id, d.day
+  )`;
 
 let SQL = null;
 let db = null;
@@ -150,6 +200,16 @@ export async function openDatabase() {
   if (migrated) await persist();
 }
 
+let memoryOnly = false;
+
+/** 테스트용: IndexedDB 없이 주어진 sql.js 데이터베이스를 그대로 쓴다. (저장하지 않는다) */
+export function useMemoryDatabase(database) {
+  memoryOnly = true;
+  db = database;
+  migrate(db);
+  loadCurrentAccount();
+}
+
 /** 현재 데이터베이스 파일 바이트 */
 export function exportFile() {
   const data = db.export();
@@ -159,6 +219,7 @@ export function exportFile() {
 }
 
 function persist() {
+  if (memoryOnly) return Promise.resolve();
   const data = exportFile();
   saving = saving.catch(() => {}).then(() => idb('readwrite', (s) => s.put(data, IDB_KEY)));
   return saving;
@@ -253,6 +314,7 @@ function planFromRow(row) {
     year: row.year,
     month: row.month,
     title: row.title,
+    mode: row.mode,
     selection: JSON.parse(row.selection),
     splitChapters: !!row.split_chapters,
     totalChars: row.total_chars,
@@ -260,7 +322,13 @@ function planFromRow(row) {
   };
 }
 
-/** 그 달의 계획과 날짜별 분량·읽음 기록. 없으면 null. account를 주지 않으면 지금 계정 */
+/**
+ * 그 달의 계획. 없으면 null. account를 주지 않으면 지금 계정.
+ *   plan.tracks: [{track, title, totalChars}]  (이어서 읽기는 하나, 병렬 읽기는 책마다 하나)
+ *   plan.days[i]: 그날 전체 — {day, parts, segments, chars, readAt, readParts}
+ *     parts: 분량이 있는 묶음별 [{track, title, segments, chars, readAt}]
+ *     segments/chars: 모든 묶음을 합친 것, readAt: 모든 묶음을 읽었을 때만 마지막 시각
+ */
 export function getPlan(year, month, account = accountId) {
   const row = one('SELECT * FROM plans WHERE account_id = $a AND year = $y AND month = $m', {
     $a: account,
@@ -269,21 +337,46 @@ export function getPlan(year, month, account = accountId) {
   });
   if (!row) return null;
   const plan = planFromRow(row);
-  plan.days = all(
-    `SELECT d.day, d.segments, d.chars, r.read_at
-       FROM plan_days d LEFT JOIN readings r ON r.plan_id = d.plan_id AND r.day = d.day
-      WHERE d.plan_id = $id ORDER BY d.day`,
+  plan.tracks = all('SELECT track, title, total_chars FROM plan_tracks WHERE plan_id = $id ORDER BY track', {
+    $id: plan.id,
+  }).map((t) => ({ track: t.track, title: t.title, totalChars: t.total_chars }));
+  const titles = new Map(plan.tracks.map((t) => [t.track, t.title]));
+
+  const byDay = new Map();
+  for (const d of all(
+    `SELECT d.track, d.day, d.segments, d.chars, r.read_at
+       FROM plan_days d
+       LEFT JOIN readings r ON r.plan_id = d.plan_id AND r.track = d.track AND r.day = d.day
+      WHERE d.plan_id = $id ORDER BY d.day, d.track`,
     { $id: plan.id },
-  ).map((d) => ({ day: d.day, segments: JSON.parse(d.segments), chars: d.chars, readAt: d.read_at }));
+  )) {
+    if (!byDay.has(d.day)) byDay.set(d.day, []);
+    const segments = JSON.parse(d.segments);
+    if (segments.length) {
+      byDay.get(d.day).push({ track: d.track, title: titles.get(d.track), segments, chars: d.chars, readAt: d.read_at });
+    }
+  }
+  plan.days = [...byDay].map(([day, parts]) => {
+    const readParts = parts.filter((p) => p.readAt).length;
+    return {
+      day,
+      parts,
+      segments: parts.flatMap((p) => p.segments),
+      chars: parts.reduce((s, p) => s + p.chars, 0),
+      readParts,
+      readAt: parts.length && readParts === parts.length ? parts.map((p) => p.readAt).sort().at(-1) : null,
+    };
+  });
   return plan;
 }
 
-/** 지금 계정의 모든 계획 요약 (최근 달부터) */
+/** 지금 계정의 모든 계획 요약 (최근 달부터). readDays는 모든 묶음을 다 읽은 날 수 */
 export function listPlans() {
   return all(
-    `SELECT p.*,
-            (SELECT COUNT(*) FROM plan_days d WHERE d.plan_id = p.id AND d.segments <> '[]') AS reading_days,
-            (SELECT COUNT(*) FROM readings r WHERE r.plan_id = p.id) AS read_days
+    `WITH ${DAY_STATUS}
+     SELECT p.*,
+            (SELECT COUNT(*) FROM day_status s WHERE s.plan_id = p.id) AS reading_days,
+            (SELECT COUNT(*) FROM day_status s WHERE s.plan_id = p.id AND s.done = s.parts) AS read_days
        FROM plans p WHERE p.account_id = $a ORDER BY p.year DESC, p.month DESC`,
     { $a: accountId },
   ).map((row) => ({ ...planFromRow(row), readingDays: row.reading_days, readDays: row.read_days }));
@@ -292,9 +385,11 @@ export function listPlans() {
 /**
  * 지금 계정의 그 달 계획을 저장한다. 같은 달에 이미 계획이 있으면 읽음 기록과 함께 지우고 새로 만든다.
  * (그 계획에서 저장한 구절은 남는다)
- * @param {{year, month, title, selection, splitChapters, days: Array<{segments, chars}>}} plan
+ * @param {{year, month, title, selection, splitChapters, mode: 'sequential'|'parallel',
+ *          tracks: Array<{title, days: Array<{segments, chars}>}>}} plan
  */
-export function savePlan({ year, month, title, selection, splitChapters, days }) {
+export function savePlan({ year, month, title, selection, splitChapters, mode, tracks }) {
+  const sum = (days) => days.reduce((s, d) => s + d.chars, 0);
   return write(() => {
     db.run('DELETE FROM plans WHERE account_id = $a AND year = $y AND month = $m', {
       $a: accountId,
@@ -302,25 +397,31 @@ export function savePlan({ year, month, title, selection, splitChapters, days })
       $m: month,
     });
     db.run(
-      `INSERT INTO plans (account_id, year, month, title, selection, split_chapters, total_chars, created_at)
-       VALUES ($a, $y, $m, $title, $sel, $split, $total, $now)`,
+      `INSERT INTO plans (account_id, year, month, title, mode, selection, split_chapters, total_chars, created_at)
+       VALUES ($a, $y, $m, $title, $mode, $sel, $split, $total, $now)`,
       {
         $a: accountId,
         $y: year,
         $m: month,
         $title: title,
+        $mode: mode,
         $sel: JSON.stringify(selection),
         $split: splitChapters ? 1 : 0,
-        $total: days.reduce((s, d) => s + d.chars, 0),
+        $total: tracks.reduce((s, t) => s + sum(t.days), 0),
         $now: localTimestamp(),
       },
     );
     const id = lastId();
-    const stmt = db.prepare('INSERT INTO plan_days (plan_id, day, segments, chars) VALUES (?, ?, ?, ?)');
+    const insTrack = db.prepare('INSERT INTO plan_tracks (plan_id, track, title, total_chars) VALUES (?, ?, ?, ?)');
+    const insDay = db.prepare('INSERT INTO plan_days (plan_id, track, day, segments, chars) VALUES (?, ?, ?, ?, ?)');
     try {
-      days.forEach((d, i) => stmt.run([id, i + 1, JSON.stringify(d.segments), d.chars]));
+      tracks.forEach((t, track) => {
+        insTrack.run([id, track, t.title, sum(t.days)]);
+        t.days.forEach((d, i) => insDay.run([id, track, i + 1, JSON.stringify(d.segments), d.chars]));
+      });
     } finally {
-      stmt.free();
+      insTrack.free();
+      insDay.free();
     }
     return id;
   });
@@ -330,30 +431,35 @@ export function deletePlan(id) {
   return write(() => db.run('DELETE FROM plans WHERE id = $id', { $id: id }));
 }
 
-/** 그날 분량을 읽음/안 읽음으로 표시한다. 읽음이면 기록된 시각을 돌려준다. */
-export function setRead(planId, day, read) {
+/**
+ * 읽음/안 읽음 표시. track을 주면 그 묶음만, 주지 않으면 그날의 모든 묶음.
+ * 읽음이면 기록된 시각(여러 묶음이면 가장 늦은 시각)을 돌려준다.
+ */
+export function setRead(planId, day, read, track = null) {
+  const where = `plan_id = $p AND day = $d ${track == null ? '' : 'AND track = $t'}`;
+  const params = { $p: planId, $d: day, ...(track == null ? {} : { $t: track }) };
   return write(() => {
     if (!read) {
-      db.run('DELETE FROM readings WHERE plan_id = $p AND day = $d', { $p: planId, $d: day });
+      db.run(`DELETE FROM readings WHERE ${where}`, params);
       return null;
     }
-    const now = localTimestamp();
-    db.run('INSERT OR IGNORE INTO readings (plan_id, day, read_at) VALUES ($p, $d, $now)', {
-      $p: planId,
-      $d: day,
-      $now: now,
-    });
-    return one('SELECT read_at FROM readings WHERE plan_id = $p AND day = $d', { $p: planId, $d: day }).read_at;
+    db.run(
+      `INSERT OR IGNORE INTO readings (plan_id, track, day, read_at)
+       SELECT plan_id, track, day, $now FROM plan_days WHERE ${where} AND segments <> '[]'`,
+      { ...params, $now: localTimestamp() },
+    );
+    return one(`SELECT MAX(read_at) AS t FROM readings WHERE ${where}`, params).t;
   });
 }
 
-/** 지금 계정에서 읽음 표시된 모든 날짜 [{y, m, d}] (연속 기록 계산용) */
+/** 지금 계정에서 모든 묶음을 다 읽은 날짜 [{y, m, d}] (연속 기록 계산용) */
 export function readDates() {
   return all(
-    `SELECT p.year AS y, p.month AS m, r.day AS d
-       FROM readings r JOIN plans p ON p.id = r.plan_id
-      WHERE p.account_id = $a
-      ORDER BY p.year, p.month, r.day`,
+    `WITH ${DAY_STATUS}
+     SELECT p.year AS y, p.month AS m, s.day AS d
+       FROM day_status s JOIN plans p ON p.id = s.plan_id
+      WHERE p.account_id = $a AND s.done = s.parts
+      ORDER BY p.year, p.month, s.day`,
     { $a: accountId },
   );
 }
@@ -361,10 +467,11 @@ export function readDates() {
 /** 지금 계정에서 분량이 배정된 모든 날짜 [{y, m, d}] */
 export function scheduledDates() {
   return all(
-    `SELECT p.year AS y, p.month AS m, d.day AS d
-       FROM plan_days d JOIN plans p ON p.id = d.plan_id
-      WHERE p.account_id = $a AND d.segments <> '[]'
-      ORDER BY p.year, p.month, d.day`,
+    `WITH ${DAY_STATUS}
+     SELECT p.year AS y, p.month AS m, s.day AS d
+       FROM day_status s JOIN plans p ON p.id = s.plan_id
+      WHERE p.account_id = $a
+      ORDER BY p.year, p.month, s.day`,
     { $a: accountId },
   );
 }

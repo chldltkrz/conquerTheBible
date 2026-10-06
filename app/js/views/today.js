@@ -9,8 +9,11 @@ import {
   accountStatus,
   avatar,
   bindReadToggles,
+  bookProgressList,
   checkIcon,
   dayRow,
+  isParallel,
+  modeLabel,
   progressOf,
   readHref,
   readingStreak,
@@ -88,6 +91,34 @@ export async function todayView(root) {
         <h2 class="today-ref">오늘은 쉬는 날입니다</h2>
         <p class="muted">선택한 분량이 날 수보다 적어 읽을 분량이 없는 날이에요.</p>
       </article>`;
+    } else if (isParallel(plan)) {
+      // 병렬 읽기: 책마다 오늘 읽을 곳과 따로 읽음 표시
+      const done = !!entry.readAt;
+      todayCard = html`<article class="today-card ${done ? 'is-done' : ''}">
+        <p class="today-meta">${plan.title} · ${modeLabel(plan)} · ${now.d}일째</p>
+        <ul class="part-list">
+          ${entry.parts.map(
+            (p) => html`<li class="${p.readAt ? 'is-read' : ''}">
+              <a href="${readHref(now.y, now.m, now.d, p.track)}">
+                <b>${formatSegments(p.segments)}</b><small>약 ${readingMinutes(p.chars)}분</small>
+              </a>
+              <button class="check ${p.readAt ? 'on' : ''}" data-action="toggle-read" data-plan="${plan.id}"
+                data-day="${now.d}" data-track="${p.track}" data-label="${p.title}" data-read="${p.readAt ? 1 : 0}"
+                aria-pressed="${!!p.readAt}" aria-label="${p.title} 읽음 표시">${checkIcon}</button>
+            </li>`,
+          )}
+        </ul>
+        <p class="today-sub">모두 약 ${readingMinutes(entry.chars)}분 · ${entry.readParts}/${entry.parts.length}권 읽음</p>
+        <div class="today-actions">
+          <a class="btn ${done ? 'btn-ghost' : 'btn-primary'}" href="${readHref(now.y, now.m, now.d)}">
+            ${done ? '다시 읽기' : '읽으러 가기'}
+          </a>
+          <button class="btn ${done ? 'btn-done' : 'btn-ghost'}" data-action="toggle-read"
+            data-plan="${plan.id}" data-day="${now.d}" data-read="${done ? 1 : 0}" aria-pressed="${done}">
+            ${checkIcon}<span>${done ? '모두 읽음' : '모두 읽음 표시'}</span>
+          </button>
+        </div>
+      </article>`;
     } else {
       const done = !!entry.readAt;
       todayCard = html`<article class="today-card ${done ? 'is-done' : ''}">
@@ -118,6 +149,12 @@ export async function todayView(root) {
         <div class="progress" role="progressbar" aria-valuenow="${progress.percent}" aria-valuemin="0" aria-valuemax="100">
           <span style="width:${progress.percent}%"></span>
         </div>
+        ${isParallel(plan)
+          ? html`<section class="block">
+              <h2 class="block-title">책별 진도</h2>
+              ${bookProgressList(plan)}
+            </section>`
+          : ''}
         ${othersBlock}
         ${missed.length
           ? html`<section class="block">

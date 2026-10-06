@@ -15,12 +15,12 @@ import {
 } from '../db.js';
 import { FONT_SIZE, applyReadingSettings } from '../prefs.js';
 import { html, setHTML, toast } from '../ui.js';
-import { accountPrefix, bookmarkIcon, checkIcon, readHref } from './common.js';
+import { accountPrefix, bookmarkIcon, checkIcon, isParallel, readHref } from './common.js';
 
 // 시가서는 한 절씩 줄을 나누어 보여 준다.
 const POETRY = new Set(['job', 'psa', 'pro', 'sng', 'lam']);
 
-export async function readerView(root, [y, m, d], { isCurrent }) {
+export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
   const plan = getPlan(y, m);
   const entry = plan?.days[d - 1];
   if (!entry || !entry.segments.length) {
@@ -62,17 +62,40 @@ export async function readerView(root, [y, m, d], { isCurrent }) {
   );
 
   // ── 읽음 완료 ────────────────────────────────────────────
-  const renderFoot = (readAt) => {
+  // 병렬 읽기면 책(묶음)마다 따로 표시하고, 아래 버튼은 남은 책을 한꺼번에 표시한다.
+  const parallel = isParallel(plan);
+  const parts = entry.parts.map((p) => ({ ...p }));
+  const dayReadAt = () => (parts.every((p) => p.readAt) ? parts.map((p) => p.readAt).sort().at(-1) : null);
+
+  const renderTrackFoot = (p) => {
+    const el = root.querySelector(`[data-track-foot="${p.track}"]`);
+    if (!el) return;
+    setHTML(
+      el,
+      p.readAt
+        ? html`<span class="track-done">${checkIcon}<span>${p.title} 읽음 · ${formatTimestamp(p.readAt)}</span></span>
+            <button class="btn btn-ghost btn-sm" data-action="toggle-part" data-track="${p.track}" data-read="1">취소</button>`
+        : html`<button class="btn btn-ghost btn-block" data-action="toggle-part" data-track="${p.track}" data-read="0">
+            ${checkIcon}<span>${p.title} 읽음 표시</span>
+          </button>`,
+    );
+  };
+
+  const renderFoot = () => {
+    const readAt = dayReadAt();
+    const left = parts.filter((p) => !p.readAt);
     setHTML(
       root.querySelector('#reader-foot'),
       html`${readAt
           ? html`<div class="done-box">
               <span class="done-mark">${checkIcon}</span>
-              <span><b>읽음</b><small>${formatTimestamp(readAt)}에 기록</small></span>
+              <span><b>${parallel ? `${parts.length}권 모두 읽음` : '읽음'}</b><small>${formatTimestamp(readAt)}에 기록</small></span>
               <button class="btn btn-ghost btn-sm" data-action="toggle" data-read="1">취소</button>
             </div>`
           : html`<button class="btn btn-primary btn-block btn-lg" data-action="toggle" data-read="0">
-              ${checkIcon}<span>읽음 완료 · 약 ${readingMinutes(entry.chars)}분 분량</span>
+              ${checkIcon}<span>${parallel && left.length < parts.length
+                ? `남은 ${left.length}권도 읽음 완료`
+                : `${parallel ? '모두 ' : ''}읽음 완료 · 약 ${readingMinutes(entry.chars)}분 분량`}</span>
             </button>`}
         <nav class="day-nav">
           ${prevDay ? html`<a href="${readHref(y, m, prevDay.day)}">‹ ${prevDay.day}일</a>` : html`<span></span>`}
@@ -81,7 +104,7 @@ export async function readerView(root, [y, m, d], { isCurrent }) {
         </nav>`,
     );
   };
-  renderFoot(entry.readAt);
+  renderFoot();
 
   // ── 절 선택과 저장 ───────────────────────────────────────
   const verses = new Map(); // 키 → {b, c, v, e, t}
@@ -167,7 +190,7 @@ export async function readerView(root, [y, m, d], { isCurrent }) {
       repaint();
       return;
     }
-    if (action === 'toggle') return toggleRead(e.target.closest('[data-action]'));
+    if (action === 'toggle' || action === 'toggle-part') return toggleRead(e.target.closest('[data-action]'));
 
     // 글자를 드래그해서 복사하려는 중이면 절 선택으로 보지 않는다.
     const verse = e.target.closest('.verse[data-ref]');
@@ -181,13 +204,23 @@ export async function readerView(root, [y, m, d], { isCurrent }) {
     }
   };
 
+  /** data-track이 있으면 그 책만, 없으면 그날의 남은 책 전부(이어서 읽기는 그날 분량) */
   const toggleRead = async (btn) => {
     btn.disabled = true;
     const read = btn.dataset.read !== '1';
+    const track = btn.dataset.track == null ? null : Number(btn.dataset.track);
+    const targets = track == null ? parts : parts.filter((p) => p.track === track);
     try {
-      const readAt = await setRead(plan.id, d, read);
-      renderFoot(readAt);
-      toast(read ? `${m}월 ${d}일 분량을 읽었습니다. 수고하셨어요!` : '읽음 표시를 지웠습니다');
+      const readAt = await setRead(plan.id, d, read, track);
+      for (const p of targets) {
+        if (!read) p.readAt = null;
+        else p.readAt ??= readAt;
+        renderTrackFoot(p);
+      }
+      renderFoot();
+      const all = dayReadAt();
+      if (track != null && read && !all) toast(`${targets[0].title} 읽음. 남은 책 ${parts.filter((p) => !p.readAt).length}권`);
+      else toast(read ? `${m}월 ${d}일 분량을 다 읽었습니다. 수고하셨어요!` : '읽음 표시를 지웠습니다');
     } catch (err) {
       btn.disabled = false;
       toast(`저장하지 못했습니다: ${err.message}`);
@@ -200,9 +233,26 @@ export async function readerView(root, [y, m, d], { isCurrent }) {
     const books = await Promise.all([...new Set(entry.segments.map((s) => s.b))].map(loadBook));
     if (!isCurrent()) return;
     const byCode = new Map(books.map((b) => [b.code, b]));
-    setHTML(article, entry.segments.map((s) => renderSegment(s, byCode.get(s.b), verses)));
+    const chapters = (segments) => segments.map((s) => renderSegment(s, byCode.get(s.b), verses));
+    setHTML(
+      article,
+      parallel
+        ? parts.map(
+            (p) => html`<section class="track" id="track-${p.track}">
+              <div class="track-head">
+                <b>${p.title}</b><span>${formatSegments(p.segments)} · 약 ${readingMinutes(p.chars)}분</span>
+              </div>
+              ${chapters(p.segments)}
+              <div class="track-foot" data-track-foot="${p.track}"></div>
+            </section>`,
+          )
+        : chapters(entry.segments),
+    );
+    parts.forEach(renderTrackFoot);
     article.removeAttribute('aria-busy');
     repaint();
+    // 오늘 화면에서 특정 책을 눌러 들어왔으면 그 책 부분으로 내려간다.
+    if (focusTrack != null) root.querySelector(`#track-${focusTrack}`)?.scrollIntoView();
   } catch (err) {
     if (!isCurrent()) return;
     setHTML(

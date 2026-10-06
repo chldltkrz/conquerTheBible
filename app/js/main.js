@@ -17,7 +17,7 @@ const routes = [
   { re: /^#?\/?$/, tab: 'today', view: todayView },
   { re: /^#\/month\/(\d{4})-(\d{2})$/, tab: 'month', view: calendarView },
   { re: /^#\/new(?:\/(\d{4})-(\d{2}))?$/, tab: 'new', view: newPlanView },
-  { re: /^#\/read\/(\d{4})-(\d{2})\/(\d{1,2})$/, tab: 'month', view: readerView },
+  { re: /^#\/read\/(\d{4})-(\d{2})\/(\d{1,2})(?:\/(\d+))?$/, tab: 'month', view: readerView },
   { re: /^#\/saved$/, tab: 'saved', view: savedView },
   { re: /^#\/settings$/, tab: 'settings', view: settingsView },
 ];
@@ -42,6 +42,7 @@ async function route() {
   const params = match.m.slice(1).map((x) => (x == null ? undefined : Number(x)));
   // 화면들은 main에 이벤트 핸들러 속성(onclick 등)을 직접 단다. 이전 화면 것을 지운다.
   main.onclick = main.oninput = main.onchange = main.onsubmit = main.onkeydown = null;
+  window.scrollTo(0, 0);
   try {
     // 화면마다 main 영역을 통째로 다시 그린다. 이전 화면의 비동기 작업이 늦게 끝나도
     // 덮어쓰지 않도록 isCurrent()로 확인할 수 있게 한다.

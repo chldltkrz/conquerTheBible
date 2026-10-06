@@ -130,6 +130,19 @@ export function buildPlan(index, chapters, days, { splitChapters = true } = {}) 
   return result;
 }
 
+/**
+ * 병렬 읽기: 고른 책마다 따로 한 달에 나눈다. 날마다 책마다 조금씩 함께 읽게 된다.
+ * @returns {Array<{b: string, days: ReturnType<typeof buildPlan>}>} 책 순서는 chapters에 처음 나온 순서
+ */
+export function buildParallelPlan(index, chapters, days, opts) {
+  const byBook = new Map();
+  for (const ch of chapters) {
+    if (!byBook.has(ch.b)) byBook.set(ch.b, []);
+    byBook.get(ch.b).push(ch);
+  }
+  return [...byBook].map(([b, list]) => ({ b, days: buildPlan(index, list, days, opts) }));
+}
+
 function toSegments(group, books) {
   const segs = [];
   for (const u of group) {

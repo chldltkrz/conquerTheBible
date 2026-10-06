@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { partition, buildPlan, verseNumbers } from '../app/js/planner.js';
+import { partition, buildPlan, buildParallelPlan, verseNumbers } from '../app/js/planner.js';
 
 // 모든 분할을 시도하는 O(n²k) 기준 구현
 function bruteCost(w, k, pen = []) {
@@ -153,6 +153,32 @@ test('이어지지 않는 장 선택과 빠진 절을 처리한다', () => {
   const plan = buildPlan(index, chapters, 5);
   assert.deepEqual(flatten(index, plan), expected(index, chapters));
   assert.ok(!flatten(index, plan).includes('aaa 2:7'));
+});
+
+test('병렬 읽기는 책마다 따로 한 달 전체에 나눈다', () => {
+  const index = fakeIndex({
+    gen: Array.from({ length: 50 }, (_, i) => 20 + (i % 15)),
+    exo: Array.from({ length: 40 }, (_, i) => 25 + (i % 10)),
+    lev: Array.from({ length: 27 }, (_, i) => 30 + (i % 8)),
+  });
+  const chapters = [...chaptersOf(index, 'gen'), ...chaptersOf(index, 'exo'), ...chaptersOf(index, 'lev')];
+  const tracks = buildParallelPlan(index, chapters, 31);
+
+  assert.deepEqual(
+    tracks.map((t) => t.b),
+    ['gen', 'exo', 'lev'],
+  );
+  for (const t of tracks) {
+    const own = chapters.filter((x) => x.b === t.b);
+    assert.equal(t.days.length, 31);
+    assert.deepEqual(flatten(index, t.days), expected(index, own), `${t.b}: 빠짐없이 순서대로`);
+    assert.ok(t.days.every((d) => d.segments.length && d.segments.every((s) => s.b === t.b)), `${t.b}: 날마다 자기 책만`);
+  }
+  // 이어서 읽기와 달리 1일에 세 책을 모두 읽는다
+  assert.deepEqual(
+    tracks.map((t) => t.days[0].segments[0].c),
+    [1, 1, 1],
+  );
 });
 
 test('선택이 비어 있으면 빈 날만 돌려준다', () => {

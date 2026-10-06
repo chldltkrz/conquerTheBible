@@ -77,3 +77,10 @@ export function confirmDialog({ title, message, confirmText = '확인', danger =
 }
 
 export const formatNumber = (n) => n.toLocaleString('ko-KR');
+
+/** 받침에 맞는 조사: josa('창세기', '을', '를') → '를', josa('시편', '을', '를') → '을' */
+export function josa(word, withFinal, withoutFinal) {
+  const code = word.charCodeAt(word.length - 1) - 0xac00;
+  const hasFinal = code >= 0 && code <= 11171 ? code % 28 !== 0 : false;
+  return hasFinal ? withFinal : withoutFinal;
+}

@@ -4,7 +4,16 @@ import { formatSegments } from '../bible.js';
 import { addMonths, compareDate, daysInMonth, formatMonth, today, weekday, WEEKDAYS, ymKey } from '../dates.js';
 import { getPlan } from '../db.js';
 import { html, setHTML } from '../ui.js';
-import { accountPrefix, bindReadToggles, dayRow, progressOf, readHref } from './common.js';
+import {
+  accountPrefix,
+  bindReadToggles,
+  bookProgress,
+  bookProgressList,
+  dayRow,
+  modeLabel,
+  progressOf,
+  readHref,
+} from './common.js';
 
 export async function calendarView(root, [y, m]) {
   if (!(m >= 1 && m <= 12)) {
@@ -46,10 +55,11 @@ export async function calendarView(root, [y, m]) {
       const cmp = compareDate(date, now);
       const cls = [
         entry.readAt ? 'is-read' : rest ? 'is-rest' : cmp < 0 ? 'is-missed' : '',
+        !entry.readAt && entry.readParts ? 'is-partial' : '',
         cmp === 0 ? 'is-today' : '',
         ['sun', '', '', '', '', '', 'sat'][weekday(y, m, entry.day)],
       ].join(' ');
-      const label = `${m}월 ${entry.day}일 ${rest ? '쉬는 날' : formatSegments(entry.segments)}${entry.readAt ? ', 읽음' : ''}`;
+      const label = `${m}월 ${entry.day}일 ${rest ? '쉬는 날' : formatSegments(entry.segments)}${entry.readAt ? ', 읽음' : entry.readParts ? `, ${entry.readParts}/${entry.parts.length}권 읽음` : ''}`;
       cells.push(
         rest
           ? html`<span class="cal-cell ${cls}" aria-label="${label}"><b>${entry.day}</b></span>`
@@ -63,13 +73,19 @@ export async function calendarView(root, [y, m]) {
       root,
       html`${head}
         <div class="plan-summary">
-          <b>${accountPrefix()}${plan.title}</b>
+          <b>${accountPrefix()}${plan.title}${modeLabel(plan) ? ` · ${modeLabel(plan)}` : ''}</b>
           <span>${progress.done}/${progress.total}일 읽음 · ${progress.percent}%</span>
         </div>
         <div class="cal" role="grid">
           <div class="cal-week">${WEEKDAYS.map((w) => html`<span>${w}</span>`)}</div>
           <div class="cal-grid">${cells}</div>
         </div>
+        ${bookProgress(plan).length > 1
+          ? html`<section class="block">
+              <h2 class="block-title">책별 진도</h2>
+              ${bookProgressList(plan)}
+            </section>`
+          : ''}
         <section class="block">
           <h2 class="block-title">날짜별 분량</h2>
           <ul class="day-list">${plan.days.map((d) => dayRow(plan, d, now))}</ul>

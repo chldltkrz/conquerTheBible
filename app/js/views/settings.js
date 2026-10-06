@@ -108,7 +108,7 @@ export async function settingsView(root) {
                   (p) => html`<li>
                     <a href="#/month/${ymKey(p.year, p.month)}">
                       <b>${formatMonth(p.year, p.month)}</b>
-                      <span>${p.title}</span>
+                      <span>${p.title}${p.mode === 'parallel' ? ' · 병렬' : ''}</span>
                       <small>${p.readDays}/${p.readingDays}일 읽음</small>
                     </a>
                     <button class="icon-btn danger" data-delete="${p.id}" data-label="${formatMonth(p.year, p.month)} ${p.title}"
