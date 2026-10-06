@@ -1,0 +1,4 @@
+node_modules/
+.cache/
+# 크롤링한 새번역 본문(저작권: 대한성서공회). `npm run crawl`로 다시 만들 수 있다.
+app/data/

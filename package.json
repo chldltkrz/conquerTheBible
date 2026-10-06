@@ -1,0 +1,21 @@
+{
+  "name": "conquer-the-bible",
+  "version": "0.1.0",
+  "private": true,
+  "description": "선택한 새번역 성경 장을 한 달 동안 고르게 나누어 읽는 PWA",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/serve.mjs",
+    "crawl": "node scripts/crawl.mjs",
+    "test": "node --test",
+    "icons": "node scripts/make-icons.mjs",
+    "vendor": "node scripts/vendor.mjs",
+    "postinstall": "node scripts/vendor.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "sql.js": "^1.14.2"
+  }
+}

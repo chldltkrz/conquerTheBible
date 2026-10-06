@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>한 달 성경 읽기</title>
+    <meta name="description" content="고른 성경 범위를 한 달 동안 날마다 고르게 나누어 읽습니다. 새번역." />
+    <meta name="theme-color" content="#f6f3ec" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#141619" media="(prefers-color-scheme: dark)" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="성경 읽기" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="css/app.css" />
+    <script src="vendor/sql-wasm-browser.js" defer></script>
+    <script type="module" src="js/main.js"></script>
+  </head>
+  <body class="booting">
+    <main id="main" tabindex="-1">
+      <p class="boot-msg">불러오는 중…</p>
+    </main>
+    <nav class="tabbar" aria-label="주 메뉴">
+      <a href="#/" data-tab="today">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5C4 5.1 5.1 4 6.5 4H12v16H6.5A2.5 2.5 0 0 1 4 17.5zM20 6.5C20 5.1 18.9 4 17.5 4H12v16h5.5a2.5 2.5 0 0 0 2.5-2.5z" /></svg>
+        <span>오늘</span>
+      </a>
+      <a href="#/month" data-tab="month">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2.5" /><path d="M3.5 10h17M8 3v4M16 3v4" /></svg>
+        <span>달력</span>
+      </a>
+      <a href="#/new" data-tab="new">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 8v8M8 12h8" /></svg>
+        <span>새 계획</span>
+      </a>
+      <a href="#/settings" data-tab="settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg>
+        <span>설정</span>
+      </a>
+    </nav>
+  </body>
+</html>
