@@ -23,6 +23,7 @@ const SHELL_FILES = [
   'js/views/newplan.js',
   'js/views/reader.js',
   'js/views/settings.js',
+  'js/views/saved.js',
   'vendor/sql-wasm-browser.js',
   'vendor/sql-wasm-browser.wasm',
   'icons/icon.svg',

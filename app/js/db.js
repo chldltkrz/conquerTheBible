@@ -1,5 +1,6 @@
 // 읽기 계획과 기록 저장소: 브라우저 안에서 도는 SQLite(sql.js).
 // 데이터베이스 파일 전체를 IndexedDB에 보관하고, 바뀔 때마다 다시 저장한다.
+// 계획·읽음 기록·저장한 구절은 계정마다 따로 두고, 화면 설정은 기기 공통이다.
 /* global initSqlJs */
 
 import { localTimestamp } from './dates.js';
@@ -8,8 +9,11 @@ const IDB_NAME = 'conquer-the-bible';
 const IDB_STORE = 'files';
 const IDB_KEY = 'records.sqlite';
 
+export const ACCOUNT_COLORS = ['#2f6a55', '#3b64b0', '#b0532a', '#7a4fa3', '#a3476b', '#2f7f8f', '#8a6d1f'];
+
 // 스키마 버전별 변경. PRAGMA user_version에 적용된 개수를 기록한다.
-const MIGRATIONS = [
+export const MIGRATIONS = [
+  // v1: 계획, 날짜별 분량, 읽음 기록, 설정
   `
   CREATE TABLE plans (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,11 +45,55 @@ const MIGRATIONS = [
     value TEXT NOT NULL
   );
   `,
+  // v2: 계정, 저장한 구절. 기존 계획은 기본 계정 '나'로 옮긴다.
+  `
+  CREATE TABLE accounts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    color      TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  INSERT INTO accounts (id, name, color, created_at)
+  VALUES (1, '나', '${ACCOUNT_COLORS[0]}', datetime('now', 'localtime'));
+
+  CREATE TABLE plans_v2 (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id     INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    year           INTEGER NOT NULL,
+    month          INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+    title          TEXT    NOT NULL,
+    selection      TEXT    NOT NULL,
+    split_chapters INTEGER NOT NULL DEFAULT 1,
+    total_chars    INTEGER NOT NULL,
+    created_at     TEXT    NOT NULL,
+    UNIQUE (account_id, year, month)           -- 계정마다 한 달에 계획 하나
+  );
+  INSERT INTO plans_v2 (id, account_id, year, month, title, selection, split_chapters, total_chars, created_at)
+  SELECT id, 1, year, month, title, selection, split_chapters, total_chars, created_at FROM plans;
+  DROP TABLE plans;
+  ALTER TABLE plans_v2 RENAME TO plans;
+
+  CREATE TABLE saved_verses (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    book       TEXT    NOT NULL,
+    chapter    INTEGER NOT NULL,
+    verse      INTEGER NOT NULL,
+    verse_end  INTEGER,                        -- 묶인 절(예: 30-32)의 끝 번호
+    text       TEXT    NOT NULL,               -- 저장할 때의 본문
+    plan_id    INTEGER REFERENCES plans(id) ON DELETE SET NULL, -- 어느 날 읽다가 저장했는지
+    day        INTEGER,
+    saved_at   TEXT    NOT NULL,
+    UNIQUE (account_id, plan_id, day, book, chapter, verse) -- 같은 날 같은 절은 한 번만
+  );
+  CREATE INDEX saved_verses_by_verse ON saved_verses (account_id, book, chapter, verse);
+  `,
 ];
 
 let SQL = null;
 let db = null;
 let saving = Promise.resolve();
+let accountId = null;
 
 // ── IndexedDB ──────────────────────────────────────────────
 
@@ -72,12 +120,16 @@ async function idb(mode, fn) {
 
 // ── SQLite ─────────────────────────────────────────────────
 
-function migrate(target) {
+/** 밀린 마이그레이션을 적용한다. 하나라도 적용했으면 true. (테스트에서도 쓴다) */
+export function migrate(target) {
   const version = target.exec('PRAGMA user_version')[0].values[0][0];
+  // 테이블을 다시 만드는 동안 연쇄 삭제가 일어나지 않도록 외래 키 검사를 끈다. (트랜잭션 밖에서만 바꿀 수 있다)
+  target.exec('PRAGMA foreign_keys = OFF');
   for (let v = version; v < MIGRATIONS.length; v++) {
     target.exec('BEGIN');
     try {
       target.exec(MIGRATIONS[v]);
+      if (target.exec('PRAGMA foreign_key_check').length) throw new Error('외래 키가 맞지 않습니다');
       target.exec(`PRAGMA user_version = ${v + 1}`);
       target.exec('COMMIT');
     } catch (err) {
@@ -86,14 +138,16 @@ function migrate(target) {
     }
   }
   target.exec('PRAGMA foreign_keys = ON');
+  return version < MIGRATIONS.length;
 }
 
 export async function openDatabase() {
   SQL = await initSqlJs({ locateFile: (file) => `vendor/${file}` });
   const bytes = await idb('readonly', (s) => s.get(IDB_KEY));
   db = bytes ? new SQL.Database(bytes) : new SQL.Database();
-  migrate(db);
-  if (!bytes) await persist();
+  const migrated = migrate(db);
+  loadCurrentAccount();
+  if (migrated) await persist();
 }
 
 /** 현재 데이터베이스 파일 바이트 */
@@ -123,6 +177,7 @@ function all(sql, params = {}) {
 }
 
 const one = (sql, params) => all(sql, params)[0] ?? null;
+const lastId = () => db.exec('SELECT last_insert_rowid()')[0].values[0][0];
 
 /** 트랜잭션으로 묶어 실행하고 IndexedDB에 저장한다. */
 async function write(fn) {
@@ -139,11 +194,62 @@ async function write(fn) {
   return result;
 }
 
+// ── 계정 ───────────────────────────────────────────────────
+
+function loadCurrentAccount() {
+  const saved = getSetting('currentAccount');
+  const exists = saved != null && one('SELECT id FROM accounts WHERE id = $id', { $id: saved });
+  accountId = exists ? saved : one('SELECT id FROM accounts ORDER BY id LIMIT 1').id;
+}
+
+const accountFromRow = (r) => ({ id: r.id, name: r.name, color: r.color });
+
+export function listAccounts() {
+  return all('SELECT id, name, color FROM accounts ORDER BY id').map(accountFromRow);
+}
+
+export function currentAccount() {
+  return accountFromRow(one('SELECT id, name, color FROM accounts WHERE id = $id', { $id: accountId }));
+}
+
+export async function switchAccount(id) {
+  if (!one('SELECT id FROM accounts WHERE id = $id', { $id: id })) throw new Error('없는 계정입니다');
+  accountId = id;
+  await setSetting('currentAccount', id);
+}
+
+/** 새 계정을 만들고 id를 돌려준다. 색은 아직 안 쓴 것부터 고른다. */
+export function createAccount(name) {
+  return write(() => {
+    const used = new Set(all('SELECT color FROM accounts').map((r) => r.color));
+    const count = one('SELECT COUNT(*) AS n FROM accounts').n;
+    const color = ACCOUNT_COLORS.find((c) => !used.has(c)) ?? ACCOUNT_COLORS[count % ACCOUNT_COLORS.length];
+    db.run('INSERT INTO accounts (name, color, created_at) VALUES ($name, $color, $now)', {
+      $name: name,
+      $color: color,
+      $now: localTimestamp(),
+    });
+    return lastId();
+  });
+}
+
+export function renameAccount(id, name) {
+  return write(() => db.run('UPDATE accounts SET name = $name WHERE id = $id', { $id: id, $name: name }));
+}
+
+/** 계정과 그 계정의 계획·기록·저장한 구절을 모두 지운다. 마지막 계정은 지울 수 없다. */
+export async function deleteAccount(id) {
+  if (one('SELECT COUNT(*) AS n FROM accounts').n <= 1) throw new Error('계정이 하나뿐이라 지울 수 없습니다');
+  await write(() => db.run('DELETE FROM accounts WHERE id = $id', { $id: id }));
+  if (id === accountId) await switchAccount(listAccounts()[0].id);
+}
+
 // ── 계획 ───────────────────────────────────────────────────
 
 function planFromRow(row) {
   return {
     id: row.id,
+    accountId: row.account_id,
     year: row.year,
     month: row.month,
     title: row.title,
@@ -154,9 +260,13 @@ function planFromRow(row) {
   };
 }
 
-/** 그 달의 계획과 날짜별 분량·읽음 기록. 없으면 null */
-export function getPlan(year, month) {
-  const row = one('SELECT * FROM plans WHERE year = $y AND month = $m', { $y: year, $m: month });
+/** 그 달의 계획과 날짜별 분량·읽음 기록. 없으면 null. account를 주지 않으면 지금 계정 */
+export function getPlan(year, month, account = accountId) {
+  const row = one('SELECT * FROM plans WHERE account_id = $a AND year = $y AND month = $m', {
+    $a: account,
+    $y: year,
+    $m: month,
+  });
   if (!row) return null;
   const plan = planFromRow(row);
   plan.days = all(
@@ -168,27 +278,34 @@ export function getPlan(year, month) {
   return plan;
 }
 
-/** 모든 계획 요약 (최근 달부터) */
+/** 지금 계정의 모든 계획 요약 (최근 달부터) */
 export function listPlans() {
   return all(
     `SELECT p.*,
             (SELECT COUNT(*) FROM plan_days d WHERE d.plan_id = p.id AND d.segments <> '[]') AS reading_days,
             (SELECT COUNT(*) FROM readings r WHERE r.plan_id = p.id) AS read_days
-       FROM plans p ORDER BY p.year DESC, p.month DESC`,
+       FROM plans p WHERE p.account_id = $a ORDER BY p.year DESC, p.month DESC`,
+    { $a: accountId },
   ).map((row) => ({ ...planFromRow(row), readingDays: row.reading_days, readDays: row.read_days }));
 }
 
 /**
- * 그 달의 계획을 저장한다. 같은 달에 이미 계획이 있으면 읽음 기록과 함께 지우고 새로 만든다.
+ * 지금 계정의 그 달 계획을 저장한다. 같은 달에 이미 계획이 있으면 읽음 기록과 함께 지우고 새로 만든다.
+ * (그 계획에서 저장한 구절은 남는다)
  * @param {{year, month, title, selection, splitChapters, days: Array<{segments, chars}>}} plan
  */
 export function savePlan({ year, month, title, selection, splitChapters, days }) {
   return write(() => {
-    db.run('DELETE FROM plans WHERE year = $y AND month = $m', { $y: year, $m: month });
+    db.run('DELETE FROM plans WHERE account_id = $a AND year = $y AND month = $m', {
+      $a: accountId,
+      $y: year,
+      $m: month,
+    });
     db.run(
-      `INSERT INTO plans (year, month, title, selection, split_chapters, total_chars, created_at)
-       VALUES ($y, $m, $title, $sel, $split, $total, $now)`,
+      `INSERT INTO plans (account_id, year, month, title, selection, split_chapters, total_chars, created_at)
+       VALUES ($a, $y, $m, $title, $sel, $split, $total, $now)`,
       {
+        $a: accountId,
         $y: year,
         $m: month,
         $title: title,
@@ -198,7 +315,7 @@ export function savePlan({ year, month, title, selection, splitChapters, days })
         $now: localTimestamp(),
       },
     );
-    const id = db.exec('SELECT last_insert_rowid()')[0].values[0][0];
+    const id = lastId();
     const stmt = db.prepare('INSERT INTO plan_days (plan_id, day, segments, chars) VALUES (?, ?, ?, ?)');
     try {
       days.forEach((d, i) => stmt.run([id, i + 1, JSON.stringify(d.segments), d.chars]));
@@ -230,22 +347,113 @@ export function setRead(planId, day, read) {
   });
 }
 
-/** 읽음 표시된 모든 날짜 [{y, m, d}] (연속 기록 계산용) */
+/** 지금 계정에서 읽음 표시된 모든 날짜 [{y, m, d}] (연속 기록 계산용) */
 export function readDates() {
   return all(
     `SELECT p.year AS y, p.month AS m, r.day AS d
        FROM readings r JOIN plans p ON p.id = r.plan_id
+      WHERE p.account_id = $a
       ORDER BY p.year, p.month, r.day`,
+    { $a: accountId },
   );
 }
 
-/** 분량이 배정된 모든 날짜 [{y, m, d}] */
+/** 지금 계정에서 분량이 배정된 모든 날짜 [{y, m, d}] */
 export function scheduledDates() {
   return all(
     `SELECT p.year AS y, p.month AS m, d.day AS d
        FROM plan_days d JOIN plans p ON p.id = d.plan_id
-      WHERE d.segments <> '[]'
+      WHERE p.account_id = $a AND d.segments <> '[]'
       ORDER BY p.year, p.month, d.day`,
+    { $a: accountId },
+  );
+}
+
+// ── 저장한 구절 ────────────────────────────────────────────
+// 같은 절을 다른 날 다시 저장하면 횟수가 늘어난다. 같은 날(계획의 같은 날짜) 안에서는 한 번만 센다.
+
+export const verseKey = (b, c, v) => `${b}:${c}:${v}`;
+
+/** 이 날 읽기에서 저장한 절의 키 집합 */
+export function savedInReading(planId, day) {
+  return new Set(
+    all(
+      'SELECT book, chapter, verse FROM saved_verses WHERE account_id = $a AND plan_id = $p AND day = $d',
+      { $a: accountId, $p: planId, $d: day },
+    ).map((r) => verseKey(r.book, r.chapter, r.verse)),
+  );
+}
+
+/** 한 장에서 절마다 지금까지 저장한 횟수 Map(절 → 횟수) */
+export function verseCounts(book, chapter) {
+  return new Map(
+    all(
+      `SELECT verse, COUNT(*) AS n FROM saved_verses
+        WHERE account_id = $a AND book = $b AND chapter = $c GROUP BY verse`,
+      { $a: accountId, $b: book, $c: chapter },
+    ).map((r) => [r.verse, r.n]),
+  );
+}
+
+/** @param {Array<{b, c, v, e?, t}>} verses */
+export function saveVerses(planId, day, verses) {
+  return write(() => {
+    const now = localTimestamp();
+    const stmt = db.prepare(
+      `INSERT OR IGNORE INTO saved_verses (account_id, book, chapter, verse, verse_end, text, plan_id, day, saved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    try {
+      for (const x of verses) stmt.run([accountId, x.b, x.c, x.v, x.e ?? null, x.t, planId, day, now]);
+    } finally {
+      stmt.free();
+    }
+  });
+}
+
+/** 이 날 읽기에서 저장한 것만 취소한다. @param {Array<{b, c, v}>} verses */
+export function unsaveVerses(planId, day, verses) {
+  return write(() => {
+    for (const x of verses) {
+      db.run(
+        `DELETE FROM saved_verses WHERE account_id = $a AND plan_id = $p AND day = $d
+            AND book = $b AND chapter = $c AND verse = $v`,
+        { $a: accountId, $p: planId, $d: day, $b: x.b, $c: x.c, $v: x.v },
+      );
+    }
+  });
+}
+
+/** 지금 계정이 저장한 구절을 절마다 하나씩, 저장 횟수와 날짜들과 함께 (많이 저장한 순) */
+export function listSavedVerses() {
+  return all(
+    `SELECT book, chapter, verse, MAX(verse_end) AS verse_end, MAX(text) AS text,
+            COUNT(*) AS times, MAX(saved_at) AS last_at, GROUP_CONCAT(saved_at, '|') AS dates
+       FROM saved_verses WHERE account_id = $a
+      GROUP BY book, chapter, verse
+      ORDER BY times DESC, last_at DESC`,
+    { $a: accountId },
+  ).map((r) => ({
+    b: r.book,
+    c: r.chapter,
+    v: r.verse,
+    e: r.verse_end,
+    t: r.text,
+    times: r.times,
+    lastAt: r.last_at,
+    dates: r.dates.split('|').sort().reverse(),
+  }));
+}
+
+/** 그 절의 저장 기록을 모두 지운다 */
+export function deleteSavedVerse(b, c, v) {
+  return write(() =>
+    db.run('DELETE FROM saved_verses WHERE account_id = $a AND book = $b AND chapter = $c AND verse = $v', {
+      $a: accountId,
+      $b: b,
+      $c: c,
+      $v: v,
+    }),
   );
 }
 
@@ -283,6 +491,7 @@ export async function importFile(bytes) {
   }
   db.close();
   db = incoming;
+  loadCurrentAccount();
   await persist();
 }
 
@@ -290,5 +499,6 @@ export async function resetAll() {
   db.close();
   db = new SQL.Database();
   migrate(db);
+  loadCurrentAccount();
   await persist();
 }

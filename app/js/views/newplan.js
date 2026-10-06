@@ -17,6 +17,7 @@ import { addMonths, daysInMonth, formatMonth, today, weekday, WEEKDAYS, ymKey } 
 import { getPlan, savePlan } from '../db.js';
 import { buildPlan } from '../planner.js';
 import { confirmDialog, formatNumber, html, setHTML, toast } from '../ui.js';
+import { accountPrefix } from './common.js';
 
 export async function newPlanView(root, [y, m]) {
   const now = today();
@@ -114,7 +115,7 @@ export async function newPlanView(root, [y, m]) {
       html`<header class="page-head month-head">
           <button class="icon-btn" data-month="-1" aria-label="이전 달">‹</button>
           <div>
-            <p class="eyebrow">새 읽기 계획</p>
+            <p class="eyebrow">${accountPrefix()}새 읽기 계획</p>
             <h1>${formatMonth(state.y, state.m)}</h1>
           </div>
           <button class="icon-btn" data-month="1" aria-label="다음 달">›</button>

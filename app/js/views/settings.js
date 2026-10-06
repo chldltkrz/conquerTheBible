@@ -2,9 +2,22 @@
 
 import { allBooks } from '../bible.js';
 import { formatMonth, today, ymKey } from '../dates.js';
-import { deletePlan, exportFile, getSetting, importFile, listPlans, resetAll, setSetting } from '../db.js';
+import {
+  currentAccount,
+  deleteAccount,
+  deletePlan,
+  exportFile,
+  getSetting,
+  importFile,
+  listAccounts,
+  listPlans,
+  renameAccount,
+  resetAll,
+  setSetting,
+} from '../db.js';
 import { FONT_SIZE, applyReadingSettings } from '../prefs.js';
 import { confirmDialog, html, setHTML, toast } from '../ui.js';
+import { avatar } from './common.js';
 
 // sw.js의 DATA_CACHE와 같은 이름이어야 한다.
 const DATA_CACHE = 'bible-data-v1';
@@ -21,6 +34,8 @@ export async function settingsView(root) {
 
   const render = async () => {
     const plans = listPlans();
+    const accounts = listAccounts();
+    const me = currentAccount().id;
     const size = getSetting('fontSize', FONT_SIZE.default);
     const family = getSetting('fontFamily', 'serif');
     const cached = await cachedBookCount();
@@ -28,6 +43,28 @@ export async function settingsView(root) {
     setHTML(
       root,
       html`<header class="page-head"><h1>설정</h1></header>
+
+        <section class="block">
+          <h2 class="block-title">계정</h2>
+          <ul class="account-manage">
+            ${accounts.map(
+              (acc) => html`<li>
+                ${avatar(acc)}
+                <input class="account-name" data-rename="${acc.id}" value="${acc.name}" maxlength="20"
+                  aria-label="${acc.name} 계정 이름" autocomplete="off" />
+                ${acc.id === me
+                  ? html`<span class="tag">사용 중</span>`
+                  : html`<button class="btn btn-ghost btn-sm" data-switch-to="${acc.id}">바꾸기</button>`}
+                ${accounts.length > 1
+                  ? html`<button class="icon-btn danger" data-delete-account="${acc.id}" data-label="${acc.name}"
+                      aria-label="${acc.name} 계정 삭제">✕</button>`
+                  : ''}
+              </li>`,
+            )}
+          </ul>
+          <p class="muted small">계정마다 읽기 계획, 읽음 기록, 저장한 구절이 따로 있습니다. 이름을 누르면 고칠 수 있습니다.</p>
+          <button class="btn btn-ghost" data-action="switch-account">계정 추가</button>
+        </section>
 
         <section class="block">
           <h2 class="block-title">읽기 화면</h2>
@@ -64,7 +101,7 @@ export async function settingsView(root) {
         </section>
 
         <section class="block">
-          <h2 class="block-title">지난 계획</h2>
+          <h2 class="block-title">${accounts.length > 1 ? `${currentAccount().name}의 계획` : '지난 계획'}</h2>
           ${plans.length
             ? html`<ul class="plan-list">
                 ${plans.map(
@@ -157,7 +194,7 @@ export async function settingsView(root) {
     } else if (d.action === 'reset') {
       const ok = await confirmDialog({
         title: '모든 기록을 지울까요?',
-        message: '모든 계획과 읽음 기록, 설정이 지워집니다. 되돌릴 수 없으니 필요하면 먼저 내보내기를 하세요.',
+        message: '모든 계정과 계획, 읽음 기록, 저장한 구절, 설정이 지워집니다. 되돌릴 수 없으니 필요하면 먼저 내보내기를 하세요.',
         confirmText: '모두 지우기',
         danger: true,
       });
@@ -177,6 +214,21 @@ export async function settingsView(root) {
       await deletePlan(Number(d.delete));
       toast('계획을 삭제했습니다');
       render();
+    } else if (d.deleteAccount) {
+      const ok = await confirmDialog({
+        title: `${d.label} 계정을 삭제할까요?`,
+        message: '이 계정의 계획, 읽음 기록, 저장한 구절이 모두 지워집니다.',
+        confirmText: '삭제',
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        await deleteAccount(Number(d.deleteAccount));
+        toast('계정을 삭제했습니다');
+      } catch (err) {
+        toast(err.message);
+      }
+      render();
     }
   };
 
@@ -189,6 +241,18 @@ export async function settingsView(root) {
   root.onchange = async (e) => {
     if (e.target.id === 'font-size') {
       await setSetting('fontSize', Number(e.target.value));
+      return;
+    }
+    if (e.target.dataset.rename) {
+      const id = Number(e.target.dataset.rename);
+      const name = e.target.value.trim();
+      if (!name) {
+        e.target.value = listAccounts().find((a) => a.id === id).name;
+        return;
+      }
+      await renameAccount(id, name);
+      toast('계정 이름을 바꿨습니다');
+      render();
       return;
     }
     if (e.target.id !== 'import-file') return;

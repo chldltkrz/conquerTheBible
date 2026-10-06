@@ -4,7 +4,7 @@ import { formatSegments } from '../bible.js';
 import { addMonths, compareDate, daysInMonth, formatMonth, today, weekday, WEEKDAYS, ymKey } from '../dates.js';
 import { getPlan } from '../db.js';
 import { html, setHTML } from '../ui.js';
-import { bindReadToggles, dayRow, progressOf, readHref } from './common.js';
+import { accountPrefix, bindReadToggles, dayRow, progressOf, readHref } from './common.js';
 
 export async function calendarView(root, [y, m]) {
   if (!(m >= 1 && m <= 12)) {
@@ -28,7 +28,7 @@ export async function calendarView(root, [y, m]) {
         root,
         html`${head}
           <section class="empty">
-            <h2>이 달의 읽기 계획이 없습니다</h2>
+            <h2>${accountPrefix()}이 달의 읽기 계획이 없습니다</h2>
             <p>범위를 고르면 ${m}월 1일부터 ${daysInMonth(y, m)}일까지 날마다 읽을 분량을 정해 드립니다.</p>
             <a class="btn btn-primary" href="#/new/${ymKey(y, m)}">${m}월 계획 만들기</a>
           </section>`,
@@ -63,7 +63,7 @@ export async function calendarView(root, [y, m]) {
       root,
       html`${head}
         <div class="plan-summary">
-          <b>${plan.title}</b>
+          <b>${accountPrefix()}${plan.title}</b>
           <span>${progress.done}/${progress.total}일 읽음 · ${progress.percent}%</span>
         </div>
         <div class="cal" role="grid">

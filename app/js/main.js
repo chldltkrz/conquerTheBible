@@ -8,6 +8,8 @@ import { calendarView } from './views/calendar.js';
 import { newPlanView } from './views/newplan.js';
 import { readerView } from './views/reader.js';
 import { settingsView } from './views/settings.js';
+import { savedView } from './views/saved.js';
+import { changeAccount, openAccountSwitcher } from './views/common.js';
 
 const main = document.getElementById('main');
 
@@ -16,6 +18,7 @@ const routes = [
   { re: /^#\/month\/(\d{4})-(\d{2})$/, tab: 'month', view: calendarView },
   { re: /^#\/new(?:\/(\d{4})-(\d{2}))?$/, tab: 'new', view: newPlanView },
   { re: /^#\/read\/(\d{4})-(\d{2})\/(\d{1,2})$/, tab: 'month', view: readerView },
+  { re: /^#\/saved$/, tab: 'saved', view: savedView },
   { re: /^#\/settings$/, tab: 'settings', view: settingsView },
 ];
 
@@ -38,7 +41,7 @@ async function route() {
   });
   const params = match.m.slice(1).map((x) => (x == null ? undefined : Number(x)));
   // 화면들은 main에 이벤트 핸들러 속성(onclick 등)을 직접 단다. 이전 화면 것을 지운다.
-  main.onclick = main.oninput = main.onchange = main.onsubmit = null;
+  main.onclick = main.oninput = main.onchange = main.onsubmit = main.onkeydown = null;
   try {
     // 화면마다 main 영역을 통째로 다시 그린다. 이전 화면의 비동기 작업이 늦게 끝나도
     // 덮어쓰지 않도록 isCurrent()로 확인할 수 있게 한다.
@@ -79,7 +82,18 @@ async function boot() {
   applyReadingSettings();
   document.body.classList.remove('booting');
   window.addEventListener('hashchange', route);
+  window.addEventListener('account-changed', route);
   route();
+
+  // 어느 화면에서든: 계정 칩을 누르면 계정 창, data-switch-to 버튼은 그 계정으로 바로 바꾼다.
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('[data-action="switch-account"]')) {
+      openAccountSwitcher();
+      return;
+    }
+    const to = e.target.closest('[data-switch-to]');
+    if (to) changeAccount(Number(to.dataset.switchTo));
+  });
 
   // 자정을 넘겨 다시 앱으로 돌아오면 '오늘'을 새로 그린다.
   let shownDay = ymKey(today().y, today().m) + today().d;

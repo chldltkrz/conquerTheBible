@@ -1,10 +1,20 @@
-// 오늘 화면: 오늘 분량, 진행률, 밀린 읽기
+// 오늘 화면: 오늘 분량, 진행률, 밀린 읽기, 다른 계정의 오늘 상태
 
 import { formatSegments, readingMinutes } from '../bible.js';
 import { addMonths, daysInMonth, formatDay, formatMonth, today, ymKey } from '../dates.js';
-import { getPlan } from '../db.js';
+import { currentAccount, getPlan, listAccounts } from '../db.js';
 import { html, setHTML, formatNumber } from '../ui.js';
-import { bindReadToggles, checkIcon, dayRow, progressOf, readHref, readingStreak } from './common.js';
+import {
+  accountChip,
+  accountStatus,
+  avatar,
+  bindReadToggles,
+  checkIcon,
+  dayRow,
+  progressOf,
+  readHref,
+  readingStreak,
+} from './common.js';
 
 export async function todayView(root) {
   const render = () => {
@@ -14,6 +24,14 @@ export async function todayView(root) {
     const nearMonthEnd = daysInMonth(now.y, now.m) - now.d < 7;
     const nextPlanMissing = nearMonthEnd && !getPlan(next.y, next.m);
 
+    const head = html`<header class="page-head head-row">
+      <div>
+        <p class="eyebrow">${formatDay(now.y, now.m, now.d)}</p>
+        <h1>오늘의 읽기</h1>
+      </div>
+      ${accountChip()}
+    </header>`;
+
     const nextCard = nextPlanMissing
       ? html`<a class="card card-link" href="#/new/${ymKey(next.y, next.m)}">
           <span><b>${next.m}월 계획을 준비하세요</b><small>다음 달 1일부터 읽을 범위를 고릅니다</small></span>
@@ -21,20 +39,38 @@ export async function todayView(root) {
         </a>`
       : '';
 
+    // 계정을 돌려 가며 읽을 수 있도록 다른 계정들의 오늘 상태를 보여 준다.
+    const me = currentAccount().id;
+    const others = listAccounts().filter((a) => a.id !== me);
+    const othersBlock = others.length
+      ? html`<section class="block">
+          <h2 class="block-title">다른 계정</h2>
+          <ul class="account-list is-inline">
+            ${others.map((acc) => {
+              const status = accountStatus(acc.id, now);
+              return html`<li>
+                <button class="account-item" data-switch-to="${acc.id}" aria-label="${acc.name} 계정으로 바꾸기">
+                  ${avatar(acc)}
+                  <span class="account-text"><b>${acc.name}</b><small class="is-${status.state}">${status.text}</small></span>
+                  ${status.state === 'read' ? html`<span class="account-check">${checkIcon}</span>` : html`<span class="chev" aria-hidden="true">›</span>`}
+                </button>
+              </li>`;
+            })}
+          </ul>
+        </section>`
+      : '';
+
     if (!plan) {
       setHTML(
         root,
-        html`<header class="page-head">
-            <p class="eyebrow">${formatDay(now.y, now.m, now.d)}</p>
-            <h1>오늘의 읽기</h1>
-          </header>
+        html`${head}
           <section class="empty">
             <img class="empty-mark" src="icons/icon.svg" alt="" />
             <h2>${now.m}월 읽기 계획이 없습니다</h2>
             <p>읽고 싶은 성경 범위를 고르면 ${now.m}월 1일부터 ${daysInMonth(now.y, now.m)}일까지 고르게 나누어 드립니다.</p>
             <a class="btn btn-primary" href="#/new/${ymKey(now.y, now.m)}">${now.m}월 계획 만들기</a>
           </section>
-          ${nextCard}`,
+          ${othersBlock} ${nextCard}`,
       );
       return;
     }
@@ -72,10 +108,7 @@ export async function todayView(root) {
 
     setHTML(
       root,
-      html`<header class="page-head">
-          <p class="eyebrow">${formatDay(now.y, now.m, now.d)}</p>
-          <h1>오늘의 읽기</h1>
-        </header>
+      html`${head}
         ${todayCard}
         <section class="stats" aria-label="진행 상황">
           <div class="stat"><b>${progress.done}<small>/${progress.total}일</small></b><span>읽은 날</span></div>
@@ -85,6 +118,7 @@ export async function todayView(root) {
         <div class="progress" role="progressbar" aria-valuenow="${progress.percent}" aria-valuemin="0" aria-valuemax="100">
           <span style="width:${progress.percent}%"></span>
         </div>
+        ${othersBlock}
         ${missed.length
           ? html`<section class="block">
               <h2 class="block-title">밀린 읽기 <span class="badge">${missed.length}</span></h2>

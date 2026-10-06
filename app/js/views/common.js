@@ -1,13 +1,116 @@
 // 여러 화면에서 함께 쓰는 조각들
 
 import { formatSegments, readingMinutes } from '../bible.js';
-import { compareDate, weekday, WEEKDAYS, ymKey } from '../dates.js';
-import { readDates, scheduledDates, setRead } from '../db.js';
-import { html, toast } from '../ui.js';
+import { compareDate, today, weekday, WEEKDAYS, ymKey } from '../dates.js';
+import {
+  createAccount,
+  currentAccount,
+  getPlan,
+  listAccounts,
+  readDates,
+  scheduledDates,
+  setRead,
+  switchAccount,
+} from '../db.js';
+import { html, setHTML, toast } from '../ui.js';
 
 export const readHref = (y, m, d) => `#/read/${ymKey(y, m)}/${d}`;
 
 export const checkIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>`;
+export const bookmarkIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10a1 1 0 0 1 1 1v15l-6-4-6 4V5a1 1 0 0 1 1-1z" /></svg>`;
+
+// ── 계정 ───────────────────────────────────────────────────
+
+/** 이름 첫 글자를 담은 색 동그라미 */
+export function avatar(acc, cls = '') {
+  return html`<span class="avatar ${cls}" style="background:${acc.color}" aria-hidden="true">${[...acc.name][0] ?? '?'}</span>`;
+}
+
+/** 머리말 오른쪽의 지금 계정 표시. 누르면 계정 바꾸기 창이 열린다. (main.js가 처리) */
+export function accountChip() {
+  const acc = currentAccount();
+  return html`<button class="account-chip" data-action="switch-account" aria-label="계정 바꾸기, 지금 계정: ${acc.name}">
+    ${avatar(acc)}<span>${acc.name}</span><span class="chev" aria-hidden="true">▾</span>
+  </button>`;
+}
+
+/** 계정이 둘 이상일 때만 "이름 · " 접두어 */
+export function accountPrefix() {
+  return listAccounts().length > 1 ? `${currentAccount().name} · ` : '';
+}
+
+/** 그 계정의 이번 달 계획과 오늘 읽었는지 한 줄 요약 */
+export function accountStatus(accountId, now = today()) {
+  const plan = getPlan(now.y, now.m, accountId);
+  if (!plan) return { text: `${now.m}월 계획 없음`, state: 'none' };
+  const entry = plan.days[now.d - 1];
+  if (!entry.segments.length) return { text: `${plan.title} · 오늘은 쉬는 날`, state: 'rest' };
+  return entry.readAt
+    ? { text: `${plan.title} · 오늘 읽음`, state: 'read' }
+    : { text: `${plan.title} · 오늘 ${formatSegments(entry.segments, { short: true })}`, state: 'todo' };
+}
+
+/** 계정을 바꾼 뒤 지금 화면을 다시 그리도록 알린다. */
+export async function changeAccount(id) {
+  await switchAccount(id);
+  window.dispatchEvent(new Event('account-changed'));
+  toast(`${currentAccount().name} 계정으로 바꿨습니다`);
+}
+
+/** 계정 바꾸기·추가 창 */
+export function openAccountSwitcher() {
+  const dlg = document.createElement('dialog');
+  dlg.className = 'dialog account-dialog';
+  const now = today();
+  const cur = currentAccount().id;
+  setHTML(
+    dlg,
+    html`<h2>계정</h2>
+      <p>계정마다 읽기 계획, 읽음 기록, 저장한 구절이 따로 있습니다.</p>
+      <ul class="account-list">
+        ${listAccounts().map((acc) => {
+          const status = accountStatus(acc.id, now);
+          return html`<li>
+            <button class="account-item ${acc.id === cur ? 'is-current' : ''}" data-account="${acc.id}"
+              aria-current="${acc.id === cur}">
+              ${avatar(acc)}
+              <span class="account-text"><b>${acc.name}</b><small class="is-${status.state}">${status.text}</small></span>
+              ${acc.id === cur ? html`<span class="account-check">${checkIcon}</span>` : ''}
+            </button>
+          </li>`;
+        })}
+      </ul>
+      <form class="account-new">
+        <input name="name" placeholder="새 계정 이름" maxlength="20" required autocomplete="off" aria-label="새 계정 이름" />
+        <button class="btn btn-primary btn-sm">추가</button>
+      </form>
+      <div class="dialog-actions"><button class="btn btn-ghost" data-close>닫기</button></div>`,
+  );
+  dlg.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-close]')) return dlg.close();
+    const item = e.target.closest('[data-account]');
+    if (!item) return;
+    dlg.close();
+    const id = Number(item.dataset.account);
+    if (id !== cur) await changeAccount(id);
+  });
+  dlg.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = e.target.name.value.trim();
+    if (!name) return;
+    dlg.close();
+    const id = await createAccount(name);
+    await switchAccount(id);
+    toast(`${name} 계정을 만들었습니다. 읽을 범위를 골라 주세요`);
+    // 새 계정은 계획이 없으니 바로 이번 달 계획 만들기로 간다.
+    const target = `#/new/${ymKey(now.y, now.m)}`;
+    if (location.hash === target) window.dispatchEvent(new Event('account-changed'));
+    else location.hash = target;
+  });
+  dlg.addEventListener('close', () => dlg.remove());
+  document.body.append(dlg);
+  dlg.showModal();
+}
 
 /** 날짜별 분량 한 줄: 날짜 · 범위 · 분 · 읽음 버튼 */
 export function dayRow(plan, entry, now) {
