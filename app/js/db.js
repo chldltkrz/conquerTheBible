@@ -3,7 +3,7 @@
 // 계획·읽음 기록·저장한 구절은 계정마다 따로 두고, 화면 설정은 기기 공통이다.
 /* global initSqlJs */
 
-import { localTimestamp } from './dates.js';
+import { addDays, daysBetween, fromISO, localTimestamp, toISO } from './dates.js';
 
 const IDB_NAME = 'conquer-the-bible';
 const IDB_STORE = 'files';
@@ -128,7 +128,47 @@ export const MIGRATIONS = [
   ALTER TABLE plan_days_v3 RENAME TO plan_days;
   ALTER TABLE readings_v3 RENAME TO readings;
   `,
+  // v4: 계획 기간을 달 대신 시작일·마지막 날로 정한다. day는 시작일부터 센 번호(1부터)라서
+  //     달 계획은 지금처럼 그 달의 날짜와 같다. 한 계정 안에서 기간이 겹치지 않게 하는 것은 savePlan이 맡는다.
+  `
+  CREATE TABLE plans_v4 (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id     INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    start_date     TEXT    NOT NULL,           -- 첫날(day 1) 'YYYY-MM-DD'
+    end_date       TEXT    NOT NULL,           -- 마지막 날 (포함)
+    title          TEXT    NOT NULL,
+    mode           TEXT    NOT NULL DEFAULT 'sequential',
+    selection      TEXT    NOT NULL,
+    split_chapters INTEGER NOT NULL DEFAULT 1,
+    total_chars    INTEGER NOT NULL,
+    created_at     TEXT    NOT NULL,
+    CHECK (end_date >= start_date)
+  );
+  INSERT INTO plans_v4 (id, account_id, start_date, end_date, title, mode, selection, split_chapters, total_chars, created_at)
+  SELECT id, account_id, printf('%04d-%02d-01', year, month), date(printf('%04d-%02d-01', year, month), '+1 month', '-1 day'),
+         title, mode, selection, split_chapters, total_chars, created_at
+    FROM plans;
+  DROP TABLE plans;
+  ALTER TABLE plans_v4 RENAME TO plans;
+  CREATE INDEX plans_by_start ON plans (account_id, start_date);
+
+  CREATE TABLE plan_days_v4 (
+    plan_id  INTEGER NOT NULL,
+    track    INTEGER NOT NULL,
+    day      INTEGER NOT NULL CHECK (day >= 1), -- 시작일부터 센 번호
+    segments TEXT    NOT NULL,
+    chars    INTEGER NOT NULL,
+    PRIMARY KEY (plan_id, track, day),
+    FOREIGN KEY (plan_id, track) REFERENCES plan_tracks(plan_id, track) ON DELETE CASCADE
+  );
+  INSERT INTO plan_days_v4 (plan_id, track, day, segments, chars) SELECT plan_id, track, day, segments, chars FROM plan_days;
+  DROP TABLE plan_days;
+  ALTER TABLE plan_days_v4 RENAME TO plan_days;
+  `,
 ];
+
+/** 한 계획의 최대 기간 (1년 1독 계획까지) */
+export const MAX_PLAN_DAYS = 366;
 
 // 날짜별 상태: 분량이 있는 묶음 수(parts)와 그중 읽은 수(done). 둘이 같으면 그날을 다 읽은 것이다.
 const DAY_STATUS = `
@@ -308,11 +348,14 @@ export async function deleteAccount(id) {
 // ── 계획 ───────────────────────────────────────────────────
 
 function planFromRow(row) {
+  const start = fromISO(row.start_date);
+  const end = fromISO(row.end_date);
   return {
     id: row.id,
     accountId: row.account_id,
-    year: row.year,
-    month: row.month,
+    start,
+    end,
+    length: daysBetween(start, end) + 1, // 날 수
     title: row.title,
     mode: row.mode,
     selection: JSON.parse(row.selection),
@@ -322,20 +365,32 @@ function planFromRow(row) {
   };
 }
 
+/** 그 날짜가 들어 있는 계획. 없으면 null. account를 주지 않으면 지금 계정. (한 계정의 계획 기간은 겹치지 않는다) */
+export function planOn(date, account = accountId) {
+  const row = one('SELECT * FROM plans WHERE account_id = $a AND start_date <= $d AND end_date >= $d', {
+    $a: account,
+    $d: toISO(date),
+  });
+  return row && loadPlan(row);
+}
+
+/** 기간 [start, end]와 하루라도 겹치는 계획들 (이른 순) */
+export function plansOverlapping(start, end, account = accountId) {
+  return all(
+    'SELECT * FROM plans WHERE account_id = $a AND start_date <= $e AND end_date >= $s ORDER BY start_date',
+    { $a: account, $s: toISO(start), $e: toISO(end) },
+  ).map(loadPlan);
+}
+
 /**
- * 그 달의 계획. 없으면 null. account를 주지 않으면 지금 계정.
+ * 계획 전체.
  *   plan.tracks: [{track, title, totalChars}]  (이어서 읽기는 하나, 병렬 읽기는 책마다 하나)
- *   plan.days[i]: 그날 전체 — {day, parts, segments, chars, readAt, readParts}
+ *   plan.days[i]: i+1번째 날 전체 — {day, date, parts, segments, chars, readAt, readParts}
+ *     day: 시작일부터 센 번호(1부터), date: 그날 {y, m, d}
  *     parts: 분량이 있는 묶음별 [{track, title, segments, chars, readAt}]
  *     segments/chars: 모든 묶음을 합친 것, readAt: 모든 묶음을 읽었을 때만 마지막 시각
  */
-export function getPlan(year, month, account = accountId) {
-  const row = one('SELECT * FROM plans WHERE account_id = $a AND year = $y AND month = $m', {
-    $a: account,
-    $y: year,
-    $m: month,
-  });
-  if (!row) return null;
+function loadPlan(row) {
   const plan = planFromRow(row);
   plan.tracks = all('SELECT track, title, total_chars FROM plan_tracks WHERE plan_id = $id ORDER BY track', {
     $id: plan.id,
@@ -360,6 +415,7 @@ export function getPlan(year, month, account = accountId) {
     const readParts = parts.filter((p) => p.readAt).length;
     return {
       day,
+      date: addDays(plan.start, day - 1),
       parts,
       segments: parts.flatMap((p) => p.segments),
       chars: parts.reduce((s, p) => s + p.chars, 0),
@@ -370,39 +426,42 @@ export function getPlan(year, month, account = accountId) {
   return plan;
 }
 
-/** 지금 계정의 모든 계획 요약 (최근 달부터). readDays는 모든 묶음을 다 읽은 날 수 */
+/** 지금 계정의 모든 계획 요약 (최근 계획부터). readDays는 모든 묶음을 다 읽은 날 수 */
 export function listPlans() {
   return all(
     `WITH ${DAY_STATUS}
      SELECT p.*,
             (SELECT COUNT(*) FROM day_status s WHERE s.plan_id = p.id) AS reading_days,
             (SELECT COUNT(*) FROM day_status s WHERE s.plan_id = p.id AND s.done = s.parts) AS read_days
-       FROM plans p WHERE p.account_id = $a ORDER BY p.year DESC, p.month DESC`,
+       FROM plans p WHERE p.account_id = $a ORDER BY p.start_date DESC`,
     { $a: accountId },
   ).map((row) => ({ ...planFromRow(row), readingDays: row.reading_days, readDays: row.read_days }));
 }
 
 /**
- * 지금 계정의 그 달 계획을 저장한다. 같은 달에 이미 계획이 있으면 읽음 기록과 함께 지우고 새로 만든다.
- * (그 계획에서 저장한 구절은 남는다)
- * @param {{year, month, title, selection, splitChapters, mode: 'sequential'|'parallel',
- *          tracks: Array<{title, days: Array<{segments, chars}>}>}} plan
+ * 지금 계정에 start부터 end까지(포함)의 계획을 저장한다. 기간이 겹치는 계획이 있으면
+ * 읽음 기록과 함께 지우고 새로 만든다. (그 계획에서 저장한 구절은 남는다)
+ * @param {{start, end, title, selection, splitChapters, mode: 'sequential'|'parallel',
+ *          tracks: Array<{title, days: Array<{segments, chars}>}>}} plan  묶음마다 days 길이 = 기간의 날 수
  */
-export function savePlan({ year, month, title, selection, splitChapters, mode, tracks }) {
+export function savePlan({ start, end, title, selection, splitChapters, mode, tracks }) {
+  const length = daysBetween(start, end) + 1;
+  if (!(length >= 1 && length <= MAX_PLAN_DAYS)) throw new Error(`기간은 1일부터 ${MAX_PLAN_DAYS}일까지 정할 수 있습니다`);
+  if (tracks.some((t) => t.days.length !== length)) throw new Error('날짜별 분량이 기간과 맞지 않습니다');
   const sum = (days) => days.reduce((s, d) => s + d.chars, 0);
   return write(() => {
-    db.run('DELETE FROM plans WHERE account_id = $a AND year = $y AND month = $m', {
+    db.run('DELETE FROM plans WHERE account_id = $a AND start_date <= $e AND end_date >= $s', {
       $a: accountId,
-      $y: year,
-      $m: month,
+      $s: toISO(start),
+      $e: toISO(end),
     });
     db.run(
-      `INSERT INTO plans (account_id, year, month, title, mode, selection, split_chapters, total_chars, created_at)
-       VALUES ($a, $y, $m, $title, $mode, $sel, $split, $total, $now)`,
+      `INSERT INTO plans (account_id, start_date, end_date, title, mode, selection, split_chapters, total_chars, created_at)
+       VALUES ($a, $s, $e, $title, $mode, $sel, $split, $total, $now)`,
       {
         $a: accountId,
-        $y: year,
-        $m: month,
+        $s: toISO(start),
+        $e: toISO(end),
         $title: title,
         $mode: mode,
         $sel: JSON.stringify(selection),
@@ -454,26 +513,23 @@ export function setRead(planId, day, read, track = null) {
 
 /** 지금 계정에서 모든 묶음을 다 읽은 날짜 [{y, m, d}] (연속 기록 계산용) */
 export function readDates() {
-  return all(
-    `WITH ${DAY_STATUS}
-     SELECT p.year AS y, p.month AS m, s.day AS d
-       FROM day_status s JOIN plans p ON p.id = s.plan_id
-      WHERE p.account_id = $a AND s.done = s.parts
-      ORDER BY p.year, p.month, s.day`,
-    { $a: accountId },
-  );
+  return dayStatusDates('AND s.done = s.parts');
 }
 
 /** 지금 계정에서 분량이 배정된 모든 날짜 [{y, m, d}] */
 export function scheduledDates() {
+  return dayStatusDates('');
+}
+
+function dayStatusDates(filter) {
   return all(
     `WITH ${DAY_STATUS}
-     SELECT p.year AS y, p.month AS m, s.day AS d
+     SELECT date(p.start_date, '+' || (s.day - 1) || ' days') AS date
        FROM day_status s JOIN plans p ON p.id = s.plan_id
-      WHERE p.account_id = $a
-      ORDER BY p.year, p.month, s.day`,
+      WHERE p.account_id = $a ${filter}
+      ORDER BY date`,
     { $a: accountId },
-  );
+  ).map((r) => fromISO(r.date));
 }
 
 // ── 저장한 구절 ────────────────────────────────────────────

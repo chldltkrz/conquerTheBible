@@ -3,8 +3,8 @@
 import { book, chapterUnit, formatSegments, loadBook, readingMinutes } from '../bible.js';
 import { formatDay, formatTimestamp, ymKey } from '../dates.js';
 import {
-  getPlan,
   getSetting,
+  planOn,
   saveVerses,
   savedInReading,
   setRead,
@@ -15,14 +15,15 @@ import {
 } from '../db.js';
 import { FONT_SIZE, applyReadingSettings } from '../prefs.js';
 import { html, setHTML, toast } from '../ui.js';
-import { accountPrefix, bookmarkIcon, checkIcon, isParallel, readHref } from './common.js';
+import { accountPrefix, bookmarkIcon, checkIcon, entryOn, isParallel, readHref } from './common.js';
 
 // 시가서는 한 절씩 줄을 나누어 보여 준다.
 const POETRY = new Set(['job', 'psa', 'pro', 'sng', 'lam']);
 
+/** 주소의 날짜(y, m, d)가 들어 있는 계획의 그날 분량. 읽음·구절 기록은 계획의 몇 번째 날(entry.day)로 남긴다. */
 export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
-  const plan = getPlan(y, m);
-  const entry = plan?.days[d - 1];
+  const plan = planOn({ y, m, d });
+  const entry = plan && entryOn(plan, { y, m, d });
   if (!entry || !entry.segments.length) {
     setHTML(
       root,
@@ -35,10 +36,13 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
   }
 
   const readingDays = plan.days.filter((x) => x.segments.length);
-  const idx = readingDays.findIndex((x) => x.day === d);
+  const idx = readingDays.indexOf(entry);
   const prevDay = readingDays[idx - 1];
   const nextDay = readingDays[idx + 1];
+  // 이웃한 날이 다른 달이면 달도 붙인다: "7일" / "11월 1일"
+  const navLabel = ({ date }) => (date.m === m ? `${date.d}일` : `${date.m}월 ${date.d}일`);
   const title = formatSegments(entry.segments);
+  const day = entry.day;
 
   setHTML(
     root,
@@ -98,9 +102,9 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
                 : `${parallel ? '모두 ' : ''}읽음 완료 · 약 ${readingMinutes(entry.chars)}분 분량`}</span>
             </button>`}
         <nav class="day-nav">
-          ${prevDay ? html`<a href="${readHref(y, m, prevDay.day)}">‹ ${prevDay.day}일</a>` : html`<span></span>`}
+          ${prevDay ? html`<a href="${readHref(prevDay.date)}">‹ ${navLabel(prevDay)}</a>` : html`<span></span>`}
           <a href="#/month/${ymKey(y, m)}">달력</a>
-          ${nextDay ? html`<a href="${readHref(y, m, nextDay.day)}">${nextDay.day}일 ›</a>` : html`<span></span>`}
+          ${nextDay ? html`<a href="${readHref(nextDay.date)}">${navLabel(nextDay)} ›</a>` : html`<span></span>`}
         </nav>`,
     );
   };
@@ -109,7 +113,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
   // ── 절 선택과 저장 ───────────────────────────────────────
   const verses = new Map(); // 키 → {b, c, v, e, t}
   const selected = new Set();
-  let savedHere = savedInReading(plan.id, d);
+  let savedHere = savedInReading(plan.id, day);
   const counts = new Map(); // 키 → 지금까지 저장한 횟수
 
   const loadCounts = () => {
@@ -161,13 +165,13 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
   const saveSelection = async (save) => {
     const list = [...selected].map((k) => verses.get(k));
     try {
-      if (save) await saveVerses(plan.id, d, list.filter((x) => !savedHere.has(verseKey(x.b, x.c, x.v))));
-      else await unsaveVerses(plan.id, d, list);
+      if (save) await saveVerses(plan.id, day, list.filter((x) => !savedHere.has(verseKey(x.b, x.c, x.v))));
+      else await unsaveVerses(plan.id, day, list);
     } catch (err) {
       toast(`저장하지 못했습니다: ${err.message}`);
       return;
     }
-    savedHere = savedInReading(plan.id, d);
+    savedHere = savedInReading(plan.id, day);
     loadCounts();
     selected.clear();
     repaint();
@@ -211,7 +215,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     const track = btn.dataset.track == null ? null : Number(btn.dataset.track);
     const targets = track == null ? parts : parts.filter((p) => p.track === track);
     try {
-      const readAt = await setRead(plan.id, d, read, track);
+      const readAt = await setRead(plan.id, day, read, track);
       for (const p of targets) {
         if (!read) p.readAt = null;
         else p.readAt ??= readAt;

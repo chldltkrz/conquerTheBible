@@ -205,6 +205,21 @@ test('새번역 전체를 31일로 나누기', { skip: !realIndex && 'app/data/i
   assert.ok(ms < 2000, `너무 느림: ${ms}ms`);
 });
 
+test('새번역 전체를 1년(366일)으로 나누기', { skip: !realIndex && 'app/data/index.json 없음' }, () => {
+  const chapters = realIndex.books.flatMap((b) => b.chapters.map((_, i) => ({ b: b.code, c: i + 1 })));
+  const t0 = performance.now();
+  const plan = buildPlan(realIndex, chapters, 366);
+  const ms = performance.now() - t0;
+
+  assert.equal(plan.length, 366);
+  assert.deepEqual(flatten(realIndex, plan), expected(realIndex, chapters));
+  assert.ok(plan.every((d) => d.segments.length), '쉬는 날 없이 모든 날에 분량이 있다');
+  const chars = plan.map((d) => d.chars);
+  const avg = chars.reduce((a, b) => a + b) / chars.length;
+  for (const c of chars) assert.ok(Math.abs(c - avg) / avg < 0.4, `평균 ${avg}에서 40% 넘게 벗어남: ${c}`);
+  assert.ok(ms < 5000, `너무 느림: ${ms}ms`);
+});
+
 test('시편 119편이 들어 있으면 그 장은 여러 날로 나뉜다', { skip: !realIndex && 'app/data/index.json 없음' }, () => {
   const chapters = Array.from({ length: 31 }, (_, i) => ({ b: 'psa', c: 100 + i }));
   const plan = buildPlan(realIndex, chapters, 31);

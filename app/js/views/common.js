@@ -1,12 +1,25 @@
 // 여러 화면에서 함께 쓰는 조각들
 
 import { book, chapterUnit, formatSegments, readingMinutes } from '../bible.js';
-import { compareDate, today, weekday, WEEKDAYS, ymKey } from '../dates.js';
+import {
+  addDays,
+  compareDate,
+  daysBetween,
+  formatDate,
+  formatPeriod,
+  isWholeMonth,
+  toISO,
+  today,
+  weekday,
+  WEEKDAYS,
+  ymKey,
+} from '../dates.js';
 import {
   createAccount,
   currentAccount,
-  getPlan,
   listAccounts,
+  listPlans,
+  planOn,
   readDates,
   scheduledDates,
   setRead,
@@ -15,7 +28,24 @@ import {
 import { html, josa, setHTML, toast } from '../ui.js';
 
 /** 본문 화면 주소. track을 주면 그 책 부분으로 바로 내려간다. */
-export const readHref = (y, m, d, track) => `#/read/${ymKey(y, m)}/${d}${track == null ? '' : `/${track}`}`;
+export const readHref = ({ y, m, d }, track) => `#/read/${ymKey(y, m)}/${d}${track == null ? '' : `/${track}`}`;
+
+/** 새 계획 화면 주소: 한 달 전체면 #/new/2026-10, 아니면 #/new/2026-10-15/2026-11-23 */
+export const newPlanHref = (start, end) =>
+  isWholeMonth(start, end) ? `#/new/${ymKey(start.y, start.m)}` : `#/new/${toISO(start)}/${toISO(end)}`;
+
+// ── 계획 기간 ──────────────────────────────────────────────
+
+/** 그 날짜의 분량. 계획 기간 밖이면 null */
+export const entryOn = (plan, date) => plan.days[daysBetween(plan.start, date)] ?? null;
+
+export const isMonthPlan = (plan) => isWholeMonth(plan.start, plan.end);
+
+/** "2026년 10월" 또는 "10월 15일 – 11월 23일" */
+export const periodLabel = (plan, opts) => formatPeriod(plan.start, plan.end, opts);
+
+/** 한 달 계획은 "12일째", 기간을 정한 계획은 "40일 중 12일째" */
+export const dayLabel = (plan, entry) => (isMonthPlan(plan) ? `${entry.day}일째` : `${plan.length}일 중 ${entry.day}일째`);
 
 export const checkIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>`;
 export const bookmarkIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10a1 1 0 0 1 1 1v15l-6-4-6 4V5a1 1 0 0 1 1-1z" /></svg>`;
@@ -40,11 +70,11 @@ export function accountPrefix() {
   return listAccounts().length > 1 ? `${currentAccount().name} · ` : '';
 }
 
-/** 그 계정의 이번 달 계획과 오늘 읽었는지 한 줄 요약 */
+/** 그 계정의 오늘 계획과 오늘 읽었는지 한 줄 요약 */
 export function accountStatus(accountId, now = today()) {
-  const plan = getPlan(now.y, now.m, accountId);
-  if (!plan) return { text: `${now.m}월 계획 없음`, state: 'none' };
-  const entry = plan.days[now.d - 1];
+  const plan = planOn(now, accountId);
+  if (!plan) return { text: '오늘 읽기 계획 없음', state: 'none' };
+  const entry = entryOn(plan, now);
   if (!entry.segments.length) return { text: `${plan.title} · 오늘은 쉬는 날`, state: 'rest' };
   if (entry.readAt) return { text: `${plan.title} · 오늘 읽음`, state: 'read' };
   if (entry.readParts) {
@@ -118,20 +148,39 @@ export function openAccountSwitcher() {
   dlg.showModal();
 }
 
+/** 날짜 칸: 날짜 숫자와 요일 */
+export function dayDate({ y, m, d }) {
+  const wd = weekday(y, m, d);
+  return html`<span class="day-date ${wd === 0 ? 'sun' : wd === 6 ? 'sat' : ''}">
+    <b>${d}</b><small>${WEEKDAYS[wd]}</small>
+  </span>`;
+}
+
+/** 날짜별 분량 목록. 여러 달에 걸치면 달이 바뀌는 곳마다 달 이름을 넣는다. row(entry)가 한 줄을 그린다. */
+export function dayList(entries, row, cls = '') {
+  const months = new Set(entries.map((e) => ymKey(e.date.y, e.date.m)));
+  const thisYear = today().y;
+  let prev = null;
+  return html`<ul class="day-list ${cls}">
+    ${entries.map((e) => {
+      const key = ymKey(e.date.y, e.date.m);
+      const sep = months.size > 1 && key !== prev;
+      prev = key;
+      return html`${sep ? html`<li class="day-sep">${e.date.y === thisYear ? '' : `${e.date.y}년 `}${e.date.m}월</li>` : ''}${row(e)}`;
+    })}
+  </ul>`;
+}
+
 /** 날짜별 분량 한 줄: 날짜 · 범위 · 분 · 읽음 버튼 */
 export function dayRow(plan, entry, now) {
-  const { year: y, month: m } = plan;
-  const date = { y, m, d: entry.day };
+  const { date } = entry;
   const rest = entry.segments.length === 0;
   const cmp = compareDate(date, now);
   const state = entry.readAt ? 'read' : rest ? 'rest' : cmp < 0 ? 'missed' : cmp === 0 ? 'today' : 'upcoming';
   const partial = !entry.readAt && entry.readParts > 0;
-  const wd = weekday(y, m, entry.day);
   return html`<li class="day-row is-${state}">
-    <a class="day-link" href="${rest ? '#' : readHref(y, m, entry.day)}" ${rest ? html`aria-disabled="true"` : ''}>
-      <span class="day-date ${wd === 0 ? 'sun' : wd === 6 ? 'sat' : ''}">
-        <b>${entry.day}</b><small>${WEEKDAYS[wd]}</small>
-      </span>
+    <a class="day-link" href="${rest ? '#' : readHref(date)}" ${rest ? html`aria-disabled="true"` : ''}>
+      ${dayDate(date)}
       <span class="day-ref">
         ${rest ? '쉬는 날' : formatSegments(entry.segments)}
         ${partial ? html`<small class="partial-note">${entry.readParts}/${entry.parts.length}권 읽음</small>` : ''}
@@ -141,14 +190,15 @@ export function dayRow(plan, entry, now) {
     ${rest
       ? ''
       : html`<button class="check ${entry.readAt ? 'on' : partial ? 'partial' : ''}" data-action="toggle-read"
-          data-plan="${plan.id}" data-day="${entry.day}" data-read="${entry.readAt ? 1 : 0}"
+          data-plan="${plan.id}" data-day="${entry.day}" data-when="${formatDate(date)}" data-read="${entry.readAt ? 1 : 0}"
           aria-pressed="${entry.readAt ? 'true' : partial ? 'mixed' : 'false'}"
-          aria-label="${entry.day}일 ${partial ? '나머지도 ' : ''}읽음 표시">${checkIcon}</button>`}
+          aria-label="${formatDate(date)} ${partial ? '나머지도 ' : ''}읽음 표시">${checkIcon}</button>`}
   </li>`;
 }
 
 /**
  * 화면 안의 읽음 버튼(data-action="toggle-read") 처리. 기록을 바꾼 뒤 onChange를 부른다.
+ * data-day는 계획의 몇 번째 날인지, data-when은 알림에 쓸 날짜("10월 7일")다.
  * data-track이 있으면 그 책(묶음)만, 없으면 그날 전체를 표시한다. 루트 요소에 한 번만 연결된다.
  */
 export function bindReadToggles(root, onChange) {
@@ -160,7 +210,8 @@ export function bindReadToggles(root, onChange) {
     const day = Number(btn.dataset.day);
     const track = btn.dataset.track == null ? null : Number(btn.dataset.track);
     const read = btn.dataset.read !== '1';
-    const what = btn.dataset.label ? `${day}일 ${btn.dataset.label}` : `${day}일 분량`;
+    const when = btn.dataset.when;
+    const what = btn.dataset.label ? `${when} ${btn.dataset.label}` : `${when} 분량`;
     try {
       await setRead(Number(btn.dataset.plan), day, read, track);
       toast(read ? `${what}${josa(what, '을', '를')} 읽음으로 기록했습니다` : `${what} 읽음 표시를 지웠습니다`);
@@ -177,24 +228,21 @@ export function bindReadToggles(root, onChange) {
  * 분량이 있는 날을 모두 읽었으면 이어진다. 쉬는 날은 건너뛰고, 계획이 없는 날에서 끊긴다.
  */
 export function readingStreak(now) {
-  const key = (y, m, d) => `${y}-${m}-${d}`;
-  const read = new Set(readDates().map((r) => key(r.y, r.m, r.d)));
-  const scheduled = scheduledDates();
-  const planned = new Set(scheduled.map((r) => `${r.y}-${r.m}`));
-  const due = new Set(scheduled.map((r) => key(r.y, r.m, r.d)));
+  const read = new Set(readDates().map(toISO));
+  const due = new Set(scheduledDates().map(toISO));
+  const periods = listPlans().map((p) => [toISO(p.start), toISO(p.end)]);
+  const planned = (iso) => periods.some(([s, e]) => s <= iso && iso <= e);
 
   let streak = 0;
-  const date = new Date(now.y, now.m - 1, now.d);
-  if (due.has(key(now.y, now.m, now.d)) && !read.has(key(now.y, now.m, now.d))) date.setDate(date.getDate() - 1);
+  let date = due.has(toISO(now)) && !read.has(toISO(now)) ? addDays(now, -1) : now;
   for (let i = 0; i < 4000; i++) {
-    const [y, m, d] = [date.getFullYear(), date.getMonth() + 1, date.getDate()];
-    if (!planned.has(`${y}-${m}`)) break;
-    const k = key(y, m, d);
+    const k = toISO(date);
+    if (!planned(k)) break;
     if (due.has(k)) {
       if (!read.has(k)) break;
       streak++;
     }
-    date.setDate(date.getDate() - 1);
+    date = addDays(date, -1);
   }
   return streak;
 }

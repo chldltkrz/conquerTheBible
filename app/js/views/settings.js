@@ -1,7 +1,7 @@
 // 설정 화면: 읽기 화면, 오프라인 저장, 계획 기록, 백업
 
 import { allBooks } from '../bible.js';
-import { formatMonth, today, ymKey } from '../dates.js';
+import { today, ymKey } from '../dates.js';
 import {
   currentAccount,
   deleteAccount,
@@ -17,7 +17,7 @@ import {
 } from '../db.js';
 import { FONT_SIZE, applyReadingSettings } from '../prefs.js';
 import { confirmDialog, html, setHTML, toast } from '../ui.js';
-import { avatar } from './common.js';
+import { avatar, isMonthPlan, periodLabel } from './common.js';
 
 // sw.js의 DATA_CACHE와 같은 이름이어야 한다.
 const DATA_CACHE = 'bible-data-v1';
@@ -34,6 +34,7 @@ export async function settingsView(root) {
 
   const render = async () => {
     const plans = listPlans();
+    const thisYear = today().y;
     const accounts = listAccounts();
     const me = currentAccount().id;
     const size = getSetting('fontSize', FONT_SIZE.default);
@@ -104,17 +105,18 @@ export async function settingsView(root) {
           <h2 class="block-title">${accounts.length > 1 ? `${currentAccount().name}의 계획` : '지난 계획'}</h2>
           ${plans.length
             ? html`<ul class="plan-list">
-                ${plans.map(
-                  (p) => html`<li>
-                    <a href="#/month/${ymKey(p.year, p.month)}">
-                      <b>${formatMonth(p.year, p.month)}</b>
-                      <span>${p.title}${p.mode === 'parallel' ? ' · 병렬' : ''}</span>
+                ${plans.map((p) => {
+                  const period = periodLabel(p, { year: p.start.y !== thisYear });
+                  return html`<li>
+                    <a href="#/month/${ymKey(p.start.y, p.start.m)}">
+                      <b>${period}</b>
                       <small>${p.readDays}/${p.readingDays}일 읽음</small>
+                      <span>${p.title}${p.mode === 'parallel' ? ' · 병렬' : ''}${isMonthPlan(p) ? '' : ` · ${p.length}일`}</span>
                     </a>
-                    <button class="icon-btn danger" data-delete="${p.id}" data-label="${formatMonth(p.year, p.month)} ${p.title}"
-                      aria-label="${formatMonth(p.year, p.month)} 계획 삭제">✕</button>
-                  </li>`,
-                )}
+                    <button class="icon-btn danger" data-delete="${p.id}" data-label="${period} ${p.title}"
+                      aria-label="${period} 계획 삭제">✕</button>
+                  </li>`;
+                })}
               </ul>`
             : html`<p class="muted">아직 만든 계획이 없습니다.</p>`}
         </section>

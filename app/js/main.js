@@ -16,7 +16,8 @@ const main = document.getElementById('main');
 const routes = [
   { re: /^#?\/?$/, tab: 'today', view: todayView },
   { re: /^#\/month\/(\d{4})-(\d{2})$/, tab: 'month', view: calendarView },
-  { re: /^#\/new(?:\/(\d{4})-(\d{2}))?$/, tab: 'new', view: newPlanView },
+  // #/new, #/new/2026-10 (그 달), #/new/2026-10-15/2026-11-23 (기간을 정해서)
+  { re: /^#\/new(?:\/(\d{4})-(\d{2})(?:-(\d{2})\/(\d{4})-(\d{2})-(\d{2}))?)?$/, tab: 'new', view: newPlanView },
   { re: /^#\/read\/(\d{4})-(\d{2})\/(\d{1,2})(?:\/(\d+))?$/, tab: 'month', view: readerView },
   { re: /^#\/saved$/, tab: 'saved', view: savedView },
   { re: /^#\/settings$/, tab: 'settings', view: settingsView },

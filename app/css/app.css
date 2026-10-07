@@ -421,7 +421,9 @@ main:focus-visible {
 
 .footer-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
+  gap: 8px;
   margin-top: 28px;
 }
 
@@ -621,6 +623,15 @@ main:focus-visible {
   background: var(--accent-soft);
 }
 
+/* 여러 달에 걸친 목록에서 달이 바뀌는 곳 */
+.day-sep {
+  padding: 6px 14px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .check {
   flex: none;
   display: grid;
@@ -742,6 +753,15 @@ main:focus-visible {
 .cal-cell.is-rest {
   background: transparent;
   opacity: 0.6;
+}
+
+/* 이 날짜에는 계획이 없다 (기간을 정한 계획이 달 중간에 시작하거나 끝날 때) */
+.cal-cell.is-off {
+  background: transparent;
+}
+
+.cal-cell.is-off b {
+  color: var(--muted);
 }
 
 .cal-cell.is-read {
@@ -1278,6 +1298,10 @@ main:focus-visible {
   gap: 8px;
 }
 
+.button-row.is-center {
+  justify-content: center;
+}
+
 .plan-list {
   list-style: none;
   margin: 0;
@@ -1302,14 +1326,22 @@ main:focus-visible {
   flex: 1;
   min-width: 0;
   display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 10px;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
   align-items: baseline;
-  padding: 14px 8px 14px 14px;
+  padding: 12px 8px 12px 14px;
   text-decoration: none;
 }
 
+.plan-list a b {
+  word-break: keep-all;
+}
+
+/* 첫 줄: 기간 · 읽은 날, 둘째 줄: 계획 이름 */
 .plan-list a span {
+  grid-column: 1 / -1;
+  color: var(--ink-2);
+  font-size: 15px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1715,6 +1747,29 @@ main:focus-visible {
 
 .mode-help + .notice {
   margin: 10px 0 0;
+}
+
+/* ── 기간 ─────────────────────────────────────────────── */
+.period-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.period-fields .field {
+  margin-bottom: 0;
+}
+
+.period-fields input {
+  min-width: 0;
+  padding: 0 10px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+#period-lengths .chips {
+  margin-top: 12px;
 }
 
 .part-list {

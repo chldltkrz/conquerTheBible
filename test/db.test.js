@@ -2,11 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import {
+  MAX_PLAN_DAYS,
+  createAccount,
+  switchAccount,
   MIGRATIONS,
   migrate,
   useMemoryDatabase,
   savePlan,
-  getPlan,
+  planOn,
+  plansOverlapping,
   setRead,
   listPlans,
   readDates,
@@ -41,7 +45,10 @@ test('v1 기록을 기본 계정으로 옮기며 아무것도 잃지 않는다',
   assert.equal(migrate(db), true);
   assert.equal(rows(db, 'PRAGMA user_version')[0][0], MIGRATIONS.length);
   assert.deepEqual(rows(db, 'SELECT id, name FROM accounts'), [[1, '나']]);
-  assert.deepEqual(rows(db, 'SELECT id, account_id, year, month, title FROM plans'), [[7, 1, 2026, 10, '신약']]);
+  // 달 계획은 그 달 1일부터 말일까지의 기간이 된다
+  assert.deepEqual(rows(db, 'SELECT id, account_id, start_date, end_date, title FROM plans'), [
+    [7, 1, '2026-10-01', '2026-10-31', '신약'],
+  ]);
   assert.equal(rows(db, 'SELECT COUNT(*) FROM plan_days')[0][0], 3);
   assert.equal(rows(db, 'SELECT COUNT(*) FROM readings')[0][0], 2);
   assert.deepEqual(rows(db, 'PRAGMA foreign_key_check'), []);
@@ -49,16 +56,15 @@ test('v1 기록을 기본 계정으로 옮기며 아무것도 잃지 않는다',
   assert.equal(migrate(db), false);
 });
 
-test('계정마다 같은 달에 계획을 하나씩 가질 수 있다', () => {
+test('2월 계획은 윤년에 맞춰 말일까지 옮겨진다', () => {
   const db = v1Database();
+  db.exec(`INSERT INTO plans (id, year, month, title, selection, total_chars, created_at)
+           VALUES (8, 2028, 2, '시편', '{}', 0, 'now'), (9, 2027, 12, '잠언', '{}', 0, 'now')`);
   migrate(db);
-  db.exec("INSERT INTO accounts (id, name, color, created_at) VALUES (2, '엄마', '#3b64b0', 'now')");
-  db.exec(`INSERT INTO plans (account_id, year, month, title, selection, total_chars, created_at)
-           VALUES (2, 2026, 10, '시편', '{}', 0, 'now')`);
-  assert.throws(() =>
-    db.exec(`INSERT INTO plans (account_id, year, month, title, selection, total_chars, created_at)
-             VALUES (2, 2026, 10, '중복', '{}', 0, 'now')`),
-  );
+  assert.deepEqual(rows(db, 'SELECT id, start_date, end_date FROM plans WHERE id > 7 ORDER BY id'), [
+    [8, '2028-02-01', '2028-02-29'],
+    [9, '2027-12-01', '2027-12-31'],
+  ]);
 });
 
 test('저장한 구절: 같은 날 한 번, 계획을 지워도 남고, 계정을 지우면 함께 지워진다', () => {
@@ -82,25 +88,28 @@ test('저장한 구절: 같은 날 한 번, 계획을 지워도 남고, 계정�
 
 test('이전 버전 읽음 기록은 묶음 0으로 옮겨져 그대로 보인다', () => {
   useMemoryDatabase(v1Database());
-  const plan = getPlan(2026, 10);
+  const plan = planOn({ y: 2026, m: 10, d: 2 });
   assert.equal(plan.mode, 'sequential');
+  assert.deepEqual([plan.start, plan.end, plan.length], [{ y: 2026, m: 10, d: 1 }, { y: 2026, m: 10, d: 31 }, 31]);
   assert.deepEqual(plan.tracks, [{ track: 0, title: '신약', totalChars: 300 }]);
   assert.deepEqual(
-    plan.days.map((d) => [d.day, d.readAt != null]),
+    plan.days.map((d) => [d.day, d.date.d, d.readAt != null]),
     [
-      [1, true],
-      [2, true],
-      [3, false],
+      [1, 1, true],
+      [2, 2, true],
+      [3, 3, false],
     ],
   );
   assert.equal(plan.days[0].parts.length, 1);
+  assert.equal(planOn({ y: 2026, m: 11, d: 1 }), null);
 });
 
-// 병렬 계획: 창세기·출애굽기 두 묶음, 3일. 출애굽기는 3일째가 쉬는 날.
+// 병렬 계획: 창세기·출애굽기 두 묶음, 11월 1일부터 3일. 출애굽기는 3일째가 쉬는 날.
 const seg = (b, c) => [{ b, c }];
+const nov1 = { y: 2026, m: 11, d: 1 };
 const parallel = {
-  year: 2026,
-  month: 11,
+  start: { y: 2026, m: 11, d: 1 },
+  end: { y: 2026, m: 11, d: 3 },
   title: '창세기 · 출애굽기',
   selection: { gen: [1, 2, 3], exo: [1, 2] },
   splitChapters: true,
@@ -122,7 +131,7 @@ test('병렬 계획: 묶음마다 따로 읽음 표시하고, 모두 읽은 날�
   useMemoryDatabase(new SQL.Database());
   await savePlan(parallel);
 
-  let plan = getPlan(2026, 11);
+  let plan = planOn(nov1);
   assert.equal(plan.mode, 'parallel');
   assert.deepEqual(
     plan.tracks.map((t) => [t.title, t.totalChars]),
@@ -141,7 +150,7 @@ test('병렬 계획: 묶음마다 따로 읽음 표시하고, 모두 읽은 날�
 
   // 1일: 창세기만 읽음 → 아직 완료 아님
   assert.ok(await setRead(plan.id, 1, true, 0));
-  plan = getPlan(2026, 11);
+  plan = planOn(nov1);
   assert.equal(plan.days[0].readParts, 1);
   assert.equal(plan.days[0].readAt, null);
   assert.deepEqual(readDates(), []);
@@ -150,7 +159,7 @@ test('병렬 계획: 묶음마다 따로 읽음 표시하고, 모두 읽은 날�
   await setRead(plan.id, 1, true, 1);
   // 3일: 그날 전체 읽음 (분량 있는 창세기만 기록된다)
   await setRead(plan.id, 3, true);
-  plan = getPlan(2026, 11);
+  plan = planOn(nov1);
   assert.ok(plan.days[0].readAt);
   assert.deepEqual(plan.days[2].parts.map((p) => p.readAt != null), [true]);
   assert.deepEqual(readDates(), [
@@ -165,17 +174,84 @@ test('병렬 계획: 묶음마다 따로 읽음 표시하고, 모두 읽은 날�
 
   // 그날 전체 취소
   await setRead(plan.id, 1, false);
-  plan = getPlan(2026, 11);
+  plan = planOn(nov1);
   assert.deepEqual(plan.days[0].parts.map((p) => p.readAt), [null, null]);
 });
 
-test('같은 달 계획을 다시 저장하면 이전 묶음과 읽음 기록이 함께 지워진다', async () => {
+test('같은 기간 계획을 다시 저장하면 이전 묶음과 읽음 기록이 함께 지워진다', async () => {
   useMemoryDatabase(new SQL.Database());
   await savePlan(parallel);
-  await setRead(getPlan(2026, 11).id, 1, true);
+  await setRead(planOn(nov1).id, 1, true);
   await savePlan({ ...parallel, mode: 'sequential', tracks: [parallel.tracks[0]] });
-  const plan = getPlan(2026, 11);
+  const plan = planOn(nov1);
   assert.equal(plan.tracks.length, 1);
   assert.ok(plan.days.every((d) => d.readAt == null));
   assert.deepEqual(readDates(), []);
+});
+
+/** 이어서 읽기 계획: 하루에 창세기 한 장씩 */
+const simple = (title, start, end, length) => ({
+  start,
+  end,
+  title,
+  selection: {},
+  splitChapters: true,
+  mode: 'sequential',
+  tracks: [{ title, days: Array.from({ length }, (_, i) => ({ segments: seg('gen', i + 1), chars: 10 })) }],
+});
+const oct = (d) => ({ y: 2026, m: 10, d });
+const nov = (d) => ({ y: 2026, m: 11, d });
+
+test('기간을 정한 계획은 달을 넘어가도 날짜마다 찾고 기록한다', async () => {
+  useMemoryDatabase(new SQL.Database());
+  await savePlan(simple('40일', oct(30), nov(2), 4));
+
+  const plan = planOn(nov(2));
+  assert.equal(plan.title, '40일');
+  assert.equal(plan.length, 4);
+  assert.equal(planOn(oct(30)).id, plan.id);
+  assert.equal(planOn(oct(29)), null);
+  assert.equal(planOn(nov(3)), null);
+  assert.deepEqual(
+    plan.days.map((d) => [d.day, d.date]),
+    [
+      [1, oct(30)],
+      [2, oct(31)],
+      [3, nov(1)],
+      [4, nov(2)],
+    ],
+  );
+
+  await setRead(plan.id, 3, true);
+  assert.deepEqual(readDates(), [nov(1)]);
+  assert.deepEqual(scheduledDates(), [oct(30), oct(31), nov(1), nov(2)]);
+  assert.deepEqual(plansOverlapping(nov(1), nov(30)).map((p) => p.id), [plan.id]);
+  assert.deepEqual(plansOverlapping(oct(1), oct(29)), []);
+});
+
+test('기간이 겹치는 계획만 지우고, 붙어 있는 계획과 다른 계정의 계획은 남긴다', async () => {
+  useMemoryDatabase(new SQL.Database());
+  await savePlan(simple('10월', oct(1), oct(31), 31));
+  await savePlan(simple('11월 초', nov(1), nov(3), 3));
+  assert.deepEqual(listPlans().map((p) => p.title), ['11월 초', '10월'], '맞붙은 기간은 겹치지 않는다');
+
+  const other = await createAccount('엄마');
+  await switchAccount(other);
+  await savePlan(simple('엄마 10월', oct(1), oct(31), 31));
+  await switchAccount(1);
+
+  // 10월 25일 ~ 11월 1일은 두 계획과 모두 겹친다
+  await savePlan(simple('8일', oct(25), nov(1), 8));
+  assert.deepEqual(listPlans().map((p) => p.title), ['8일']);
+  assert.equal(planOn(oct(2)), null);
+  assert.equal(planOn(oct(2), other).title, '엄마 10월');
+});
+
+test('기간이 맞지 않는 계획은 저장하지 않는다', async () => {
+  useMemoryDatabase(new SQL.Database());
+  assert.throws(() => savePlan(simple('짧음', oct(1), oct(5), 4)), /기간과 맞지 않습니다/);
+  assert.throws(() => savePlan(simple('거꾸로', oct(5), oct(1), 1)), /기간은/);
+  const end = { y: 2027, m: 10, d: 2 }; // 367일
+  assert.throws(() => savePlan(simple('너무 김', oct(1), end, MAX_PLAN_DAYS + 1)), /기간은/);
+  assert.deepEqual(listPlans(), []);
 });
