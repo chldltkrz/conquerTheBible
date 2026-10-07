@@ -5,6 +5,7 @@ import { listSavedVerses, saveVerseToday, verseKey } from '../db.js';
 import { esc, html, raw, setHTML, toast } from '../ui.js';
 import { bookmarkIcon, shareIcon, shareVerses } from './common.js';
 import { verseHead, verseRef } from './saved.js';
+import { track } from '../analytics.js';
 
 const PAGE = 50;
 
@@ -39,6 +40,8 @@ function loadCorpus(onProgress) {
 
 // 화면을 떠났다 돌아와도 검색어와 결과를 유지한다.
 const state = { q: '', scope: 'all', shown: PAGE, open: new Set() };
+// 사용 통계에 마지막으로 센 검색(범위|낱말). 돌아와서 같은 검색을 다시 그려도 두 번 세지 않는다.
+let lastTrackedSearch = '';
 
 const wordsOf = (q) => q.trim().split(/\s+/).filter(Boolean);
 
@@ -177,9 +180,23 @@ export async function searchView(root, _params, { isCurrent }) {
     </div>`;
   };
 
+  // 검색 통계: 검색어는 보내지 않고 낱말 수와 결과 수만 보낸다.
+  let trackTimer = null;
+  const trackSearch = () => {
+    clearTimeout(trackTimer);
+    const words = wordsOf(state.q);
+    const key = `${state.scope}|${words.join(' ')}`;
+    if (!words.length || key === lastTrackedSearch) return;
+    lastTrackedSearch = key;
+    const count = results.length;
+    track('search_performed', { scope: state.scope, word_count: words.length, result_count: count, zero_results: count === 0 });
+  };
+
   let seq = 0;
-  const run = async () => {
+  /** submitted: 찾기를 눌렀으면 바로 세고, 입력 중이면 1.5초 동안 검색어가 그대로일 때 센다 */
+  const run = async (submitted = false) => {
     const my = ++seq;
+    clearTimeout(trackTimer);
     state.shown = PAGE;
     if (!wordsOf(state.q).length) {
       results = [];
@@ -209,6 +226,8 @@ export async function searchView(root, _params, { isCurrent }) {
     loadCounts();
     results = find(state.q, state.scope);
     renderResults();
+    if (submitted) trackSearch();
+    else trackTimer = setTimeout(trackSearch, 1500);
   };
 
   let timer = null;
@@ -216,6 +235,7 @@ export async function searchView(root, _params, { isCurrent }) {
     if (e.target.name !== 'q') return;
     state.q = e.target.value;
     clearTimeout(timer);
+    clearTimeout(trackTimer);
     timer = setTimeout(run, 300);
   };
   root.onchange = (e) => {
@@ -228,7 +248,7 @@ export async function searchView(root, _params, { isCurrent }) {
     clearTimeout(timer);
     state.q = form.q.value;
     form.q.blur(); // 휴대폰 키보드를 닫는다
-    run();
+    run(true);
   };
   root.onclick = async (e) => {
     const btn = e.target.closest('button');
@@ -242,11 +262,12 @@ export async function searchView(root, _params, { isCurrent }) {
       else state.open.add(d.context);
       renderResults();
     } else if (d.share) {
-      shareVerses([corpus[Number(d.share)]]);
+      shareVerses([corpus[Number(d.share)]], 'search');
     } else if (d.save) {
       const x = corpus[Number(d.save)];
       try {
         const added = await saveVerseToday(x);
+        if (added) track('verses_saved', { surface: 'search', count: 1 });
         toast(added ? `${verseRef(x)} 구절을 저장했습니다` : '오늘 이미 저장한 구절입니다');
       } catch (err) {
         toast(`저장하지 못했습니다: ${err.message}`);

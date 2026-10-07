@@ -2,7 +2,7 @@
 //   앱 파일·index.json  → 네트워크 우선 (온라인이면 항상 최신), 실패하면 캐시
 //   성경 본문(books/*.json) → 캐시 우선 (본문은 바뀌지 않는다)
 
-const SHELL_CACHE = 'shell-v1';
+const SHELL_CACHE = 'shell-v2';
 const DATA_CACHE = 'bible-data-v1'; // js/views/settings.js와 같은 이름
 
 const SHELL_FILES = [
@@ -28,8 +28,10 @@ const SHELL_FILES = [
   'js/views/search.js',
   'js/views/listen.js',
   'js/tts.js',
+  'js/analytics.js',
   'vendor/sql-wasm-browser.js',
   'vendor/sql-wasm-browser.wasm',
+  'vendor/posthog.js',
   'icons/icon.svg',
   'icons/icon-192.png',
   'icons/icon-512.png',

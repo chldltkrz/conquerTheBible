@@ -139,6 +139,6 @@ export async function calendarView(root, [y, m]) {
     );
   };
 
-  bindReadToggles(root, render);
+  bindReadToggles(root, render, 'calendar');
   render();
 }

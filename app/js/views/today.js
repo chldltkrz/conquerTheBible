@@ -15,6 +15,7 @@ import {
 } from '../dates.js';
 import { currentAccount, listAccounts, listPlans, planOn, plansOverlapping, rebalancePlan } from '../db.js';
 import { confirmDialog, html, setHTML, formatNumber, toast } from '../ui.js';
+import { track } from '../analytics.js';
 import {
   accountChip,
   accountStatus,
@@ -238,9 +239,19 @@ export async function todayView(root) {
         '이미 읽은 날은 그대로 두고, 지난 날짜에는 "분량을 뒤로 옮김"으로 남습니다.',
       confirmText: '다시 나누기',
     });
-    if (!ok) return;
+    if (!ok) {
+      track('rebalance_cancelled', { missed_days: result.missedDays });
+      return;
+    }
     try {
       await rebalancePlan(plan.id, result.trackChanges);
+      track('rebalance_completed', () => ({
+        plan_mode: plan.mode,
+        missed_days: result.missedDays,
+        target_days: result.targetDays,
+        before_minutes: result.beforeMinutes,
+        after_minutes: result.afterMinutes,
+      }));
     } catch (err) {
       toast(`다시 나누지 못했습니다: ${err.message}`);
       return;
@@ -249,7 +260,7 @@ export async function todayView(root) {
     render();
   };
 
-  bindReadToggles(root, render);
+  bindReadToggles(root, render, 'today');
   const onToggle = root.onclick;
   root.onclick = (e) => {
     if (e.target.closest('[data-action="rebalance"]')) return rebalance();

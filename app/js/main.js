@@ -11,21 +11,28 @@ import { settingsView } from './views/settings.js';
 import { savedView } from './views/saved.js';
 import { notesView } from './views/notes.js';
 import { searchView } from './views/search.js';
-import { changeAccount, openAccountSwitcher } from './views/common.js';
+import { changeAccount, openAccountSwitcher, openedProps } from './views/common.js';
 import { player } from './tts.js';
+import { initAnalytics, track } from './analytics.js';
 
 const main = document.getElementById('main');
 
+// tab은 아래 메뉴 강조용(본문 화면도 'month'), screen은 사용 통계에 쓰는 화면 이름
 const routes = [
-  { re: /^#?\/?$/, tab: 'today', view: todayView },
-  { re: /^#\/month\/(\d{4})-(\d{2})$/, tab: 'month', view: calendarView },
+  { re: /^#?\/?$/, tab: 'today', screen: 'today', view: todayView },
+  { re: /^#\/month\/(\d{4})-(\d{2})$/, tab: 'month', screen: 'calendar', view: calendarView },
   // #/new, #/new/2026-10 (그 달), #/new/2026-10-15/2026-11-23 (기간을 정해서)
-  { re: /^#\/new(?:\/(\d{4})-(\d{2})(?:-(\d{2})\/(\d{4})-(\d{2})-(\d{2}))?)?$/, tab: 'new', view: newPlanView },
-  { re: /^#\/read\/(\d{4})-(\d{2})\/(\d{1,2})(?:\/(\d+))?$/, tab: 'month', view: readerView },
-  { re: /^#\/saved$/, tab: 'saved', view: savedView },
-  { re: /^#\/notes$/, tab: 'saved', view: notesView },
-  { re: /^#\/search$/, tab: 'saved', view: searchView },
-  { re: /^#\/settings$/, tab: 'settings', view: settingsView },
+  {
+    re: /^#\/new(?:\/(\d{4})-(\d{2})(?:-(\d{2})\/(\d{4})-(\d{2})-(\d{2}))?)?$/,
+    tab: 'new',
+    screen: 'new_plan',
+    view: newPlanView,
+  },
+  { re: /^#\/read\/(\d{4})-(\d{2})\/(\d{1,2})(?:\/(\d+))?$/, tab: 'month', screen: 'reader', view: readerView },
+  { re: /^#\/saved$/, tab: 'saved', screen: 'saved', view: savedView },
+  { re: /^#\/notes$/, tab: 'saved', screen: 'notes', view: notesView },
+  { re: /^#\/search$/, tab: 'saved', screen: 'search', view: searchView },
+  { re: /^#\/settings$/, tab: 'settings', screen: 'settings', view: settingsView },
 ];
 
 let renderSeq = 0;
@@ -38,6 +45,7 @@ async function route() {
     return;
   }
   const seq = ++renderSeq;
+  track('$pageview', { screen: match.r.screen });
   document.querySelectorAll('.tabbar a').forEach((a) => {
     a.toggleAttribute('aria-current', a.dataset.tab === match.r.tab);
     if (a.dataset.tab === 'month') {
@@ -58,6 +66,7 @@ async function route() {
     if (seq === renderSeq) main.focus({ preventScroll: true });
   } catch (err) {
     console.error(err);
+    track('app_error', { where: 'route', screen: match.r.screen, message: String(err?.message ?? err).slice(0, 120) });
     if (seq === renderSeq) showError(err);
   }
 }
@@ -74,10 +83,12 @@ function showError(err) {
 }
 
 async function boot() {
+  initAnalytics();
   try {
     await Promise.all([openDatabase(), loadIndex()]);
   } catch (err) {
     console.error(err);
+    track('app_error', { where: 'boot', message: String(err?.message ?? err).slice(0, 120) });
     setHTML(
       main,
       html`<section class="empty">
@@ -92,6 +103,8 @@ async function boot() {
   document.body.classList.remove('booting');
   window.addEventListener('hashchange', route);
   window.addEventListener('account-changed', route);
+  track('app_opened', () => ({ launch: 'cold', ...openedProps() }));
+  window.addEventListener('appinstalled', () => track('pwa_installed'));
   route();
 
   // 어느 화면에서든: 계정 칩을 누르면 계정 창, data-switch-to 버튼은 그 계정으로 바로 바꾼다.
@@ -105,8 +118,18 @@ async function boot() {
   });
 
   // 자정을 넘겨 다시 앱으로 돌아오면 '오늘'을 새로 그린다.
+  // 30분 넘게 숨겨졌다가 돌아오면 앱을 다시 연 것으로 센다(사용 통계).
   let shownDay = ymKey(today().y, today().m) + today().d;
+  let hiddenAt = null;
   document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      hiddenAt = Date.now();
+      return;
+    }
+    if (hiddenAt != null && Date.now() - hiddenAt >= 30 * 60 * 1000) {
+      track('app_opened', () => ({ launch: 'resume', ...openedProps() }));
+    }
+    hiddenAt = null;
     const t = today();
     const key = ymKey(t.y, t.m) + t.d;
     if (document.visibilityState === 'visible' && key !== shownDay) {

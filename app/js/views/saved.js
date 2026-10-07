@@ -5,6 +5,7 @@ import { formatTimestamp } from '../dates.js';
 import { deleteSavedVerse, listSavedVerses, saveVerseNote, verseKey, verseNotes } from '../db.js';
 import { confirmDialog, html, setHTML, toast } from '../ui.js';
 import { accountChip, shareIcon, shareVerses, verseTabs } from './common.js';
+import { track } from '../analytics.js';
 
 const SORTS = [
   { id: 'count', label: '많이 저장한 순' },
@@ -118,7 +119,7 @@ export async function savedView(root) {
     if (d.share) {
       const [b, c, v] = d.share.split(':');
       const x = listSavedVerses().find((s) => s.b === b && s.c === Number(c) && s.v === Number(v));
-      if (x) shareVerses([x]);
+      if (x) shareVerses([x], 'saved');
     } else if (d.memo) {
       editing = d.memo;
       render();
@@ -150,6 +151,7 @@ export async function savedView(root) {
     const [b, c, v] = form.dataset.memoForm.split(':');
     try {
       const at = await saveVerseNote(b, Number(c), Number(v), form.text.value);
+      track('verse_note_saved', { action: at ? 'saved' : 'deleted' }); // 메모 내용은 보내지 않는다
       toast(at ? '메모를 저장했습니다' : '메모를 지웠습니다');
     } catch (err) {
       toast(`저장하지 못했습니다: ${err.message}`);

@@ -400,6 +400,12 @@ export function planOn(date, account = accountId) {
   return row && loadPlan(row);
 }
 
+/** id로 계획 전체. 없으면 null */
+export function getPlan(id) {
+  const row = one('SELECT * FROM plans WHERE id = $id', { $id: id });
+  return row && loadPlan(row);
+}
+
 /** 기간 [start, end]와 하루라도 겹치는 계획들 (이른 순) */
 export function plansOverlapping(start, end, account = accountId) {
   return all(

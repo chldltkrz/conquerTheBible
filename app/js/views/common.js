@@ -1,6 +1,6 @@
 // 여러 화면에서 함께 쓰는 조각들
 
-import { book, chapterUnit, formatSegments, getIndex, readingMinutes, shareText } from '../bible.js';
+import { book, chapterUnit, describeSelection, formatSegments, getIndex, readingMinutes, shareText } from '../bible.js';
 import {
   addDays,
   compareDate,
@@ -17,6 +17,7 @@ import {
 import {
   createAccount,
   currentAccount,
+  getPlan,
   listAccounts,
   listPlans,
   movedDates,
@@ -28,6 +29,7 @@ import {
 } from '../db.js';
 import { copyText, html, josa, setHTML, toast } from '../ui.js';
 import { rebalanceTrack } from '../planner.js';
+import { track, trackOnce } from '../analytics.js';
 
 /** 본문 화면 주소. track을 주면 그 책 부분으로 바로 내려간다. */
 export const readHref = ({ y, m, d }, track) => `#/read/${ymKey(y, m)}/${d}${track == null ? '' : `/${track}`}`;
@@ -54,8 +56,9 @@ export const bookmarkIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><pa
 export const shareIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3M7.5 7.5 12 3l4.5 4.5M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" /></svg>`;
 
 /** 절들을 "말씀 - 책 장:절" 형식으로 클립보드에 복사하고 알린다. */
-export async function shareVerses(verses) {
+export async function shareVerses(verses, surface) {
   const ok = await copyText(shareText(verses));
+  track('verses_shared', { surface, count: verses.length, copied: ok });
   toast(ok ? '말씀을 클립보드에 복사했습니다' : '복사하지 못했습니다. 브라우저의 클립보드 권한을 확인해 주세요');
 }
 
@@ -103,6 +106,7 @@ export const modeLabel = (plan) =>
 /** 계정을 바꾼 뒤 지금 화면을 다시 그리도록 알린다. */
 export async function changeAccount(id) {
   await switchAccount(id);
+  track('account_switched');
   window.dispatchEvent(new Event('account-changed'));
   toast(`${currentAccount().name} 계정으로 바꿨습니다`);
 }
@@ -151,6 +155,7 @@ export function openAccountSwitcher() {
     dlg.close();
     const id = await createAccount(name);
     await switchAccount(id);
+    track('account_created');
     toast(`${name} 계정을 만들었습니다. 읽을 범위를 골라 주세요`);
     // 새 계정은 계획이 없으니 바로 이번 달 계획 만들기로 간다.
     const target = `#/new/${ymKey(now.y, now.m)}`;
@@ -215,7 +220,7 @@ export function dayRow(plan, entry, now) {
  * data-day는 계획의 몇 번째 날인지, data-when은 알림에 쓸 날짜("10월 7일")다.
  * data-track이 있으면 그 책(묶음)만, 없으면 그날 전체를 표시한다. 루트 요소에 한 번만 연결된다.
  */
-export function bindReadToggles(root, onChange) {
+export function bindReadToggles(root, onChange, surface) {
   root.onclick = async (e) => {
     const btn = e.target.closest('[data-action="toggle-read"]');
     if (!btn) return;
@@ -227,7 +232,10 @@ export function bindReadToggles(root, onChange) {
     const when = btn.dataset.when;
     const what = btn.dataset.label ? `${when} ${btn.dataset.label}` : `${when} 분량`;
     try {
-      await setRead(Number(btn.dataset.plan), day, read, track);
+      const planId = Number(btn.dataset.plan);
+      const snap = readSnapshot(planId);
+      await setRead(planId, day, read, track);
+      trackReadChange(snap, { planId, day, track, read, surface });
       toast(read ? `${what}${josa(what, '을', '를')} 읽음으로 기록했습니다` : `${what} 읽음 표시를 지웠습니다`);
       await onChange();
     } catch (err) {
@@ -413,4 +421,89 @@ export function verseTabs(active) {
   return html`<nav class="subtabs" aria-label="구절 메뉴">
     ${tabs.map(([id, href, label]) => html`<a href="${href}" ${id === active ? html`aria-current="page"` : ''}>${label}</a>`)}
   </nav>`;
+}
+
+// ── 사용 통계용 속성 ───────────────────────────────────────
+
+const STREAK_MILESTONES = [3, 7, 14, 21, 30, 50, 100, 200, 365];
+
+/** 읽음 이벤트 공통 속성. trackNo를 주면 그 묶음만 본다. */
+export function readingEventProps(plan, day, trackNo = null) {
+  const entry = plan.days[day - 1];
+  const parts = trackNo == null ? entry.parts : entry.parts.filter((p) => p.track === trackNo);
+  const books = [...new Set(parts.flatMap((p) => p.segments.map((s) => s.b)))];
+  return {
+    plan_mode: plan.mode,
+    plan_scope: describeSelection(plan.selection),
+    plan_length: plan.length,
+    plan_day: day,
+    days_late: daysBetween(entry.date, today()), // 0 오늘, 양수 밀린 날, 음수 미리 읽음
+    book: books[0] ?? null,
+    books,
+    minutes: readingMinutes(parts.reduce((s, p) => s + p.chars, 0)),
+    scope: trackNo == null ? 'day' : 'track',
+  };
+}
+
+/** 앱을 열 때의 상태 */
+export function openedProps(now = today()) {
+  const plan = planOn(now);
+  const streak = readingStreak(now);
+  if (!plan) return { today_status: 'no_plan', streak };
+  const entry = entryOn(plan, now);
+  return {
+    today_status: !entry.segments.length ? 'rest' : entry.readAt ? 'read' : entry.readParts ? 'partial' : 'todo',
+    streak,
+    plan_mode: plan.mode,
+    plan_day: entry.day,
+    plan_length: plan.length,
+    plan_progress_pct: progressOf(plan).percent,
+    missed_days: plan.days.filter((d) => d.day < entry.day && d.segments.length && !d.readAt).length,
+  };
+}
+
+/** 읽음 표시 직전 상태 (완독·연속 기록 달성을 알아내려고) */
+export function readSnapshot(planId) {
+  try {
+    return { plan: getPlan(planId), streak: readingStreak(today()) };
+  } catch {
+    return null;
+  }
+}
+
+/** 읽음 표시를 바꾼 뒤 부른다: day_marked_read / day_unmarked_read, plan_completed, streak_milestone */
+export function trackReadChange(snap, { planId, day, track: trackNo = null, read, surface, extra = {} }) {
+  try {
+    const plan = getPlan(planId);
+    if (!plan) return;
+    const props = { ...readingEventProps(plan, day, trackNo), surface };
+    if (!read) {
+      track('day_unmarked_read', props);
+      return;
+    }
+    const after = progressOf(plan);
+    track('day_marked_read', {
+      ...props,
+      day_complete: !!plan.days[day - 1].readAt,
+      plan_progress_pct: after.percent,
+      ...extra,
+    });
+    const before = snap?.plan && progressOf(snap.plan);
+    if (before && after.total && after.done === after.total && before.done < before.total) {
+      // createdAt까지 넣는 이유: 기록을 모두 지우면 계획 id가 1부터 다시 시작한다
+      trackOnce(`plan_completed:${plan.id}:${plan.createdAt}`, 'plan_completed', {
+        plan_mode: plan.mode,
+        plan_scope: props.plan_scope,
+        plan_length: plan.length,
+        rebalanced: plan.days.some((d) => d.moved),
+        days_after_end: daysBetween(plan.end, today()),
+      });
+    }
+    const streak = readingStreak(today());
+    if (snap && streak > snap.streak && STREAK_MILESTONES.includes(streak)) {
+      trackOnce(`streak:${streak}:${toISO(today())}`, 'streak_milestone', { streak });
+    }
+  } catch (err) {
+    console.warn('[analytics]', err);
+  }
 }

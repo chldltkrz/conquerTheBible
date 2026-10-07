@@ -20,6 +20,7 @@ import { confirmDialog, html, setHTML, toast } from '../ui.js';
 import { avatar, isMonthPlan, periodLabel } from './common.js';
 import { koreanVoices, pickVoice, player, RATES, voicesReady } from '../tts.js';
 import { rateLabel, speakerIcon } from './listen.js';
+import { isOptedOut, setOptOut, track } from '../analytics.js';
 
 const manualIcon = html`<svg viewBox="0 0 24 24"><path d="M4 5.5C4 4.7 4.7 4 5.5 4H10a2 2 0 0 1 2 2v14a1.5 1.5 0 0 0-1.5-1.5H4zM20 5.5c0-.8-.7-1.5-1.5-1.5H14a2 2 0 0 0-2 2v14a1.5 1.5 0 0 1 1.5-1.5H20z" /></svg>`;
 
@@ -181,6 +182,17 @@ export async function settingsView(root) {
           </div>
         </section>
 
+        <section class="block">
+          <h2 class="block-title">사용 통계</h2>
+          <div class="card">
+            <label class="field-row">
+              <span>익명 사용 통계 보내기</span>
+              <input type="checkbox" id="analytics-opt-in" ${isOptedOut() ? '' : 'checked'} />
+            </label>
+            <p class="muted small">어떤 기능을 얼마나 쓰는지 익명으로 모아 앱을 고치는 데 씁니다. 계정 이름, 계획 이름, 메모, 구절, 검색어는 보내지 않습니다.</p>
+          </div>
+        </section>
+
         <section class="block about">
           <p>성경 본문: 새번역 © 대한성서공회. 개인 묵상과 읽기 용도로만 사용하세요.</p>
         </section>`,
@@ -212,6 +224,7 @@ export async function settingsView(root) {
     downloading = false;
     toast(failed ? `${failed}권을 받지 못했습니다. 인터넷 연결을 확인하세요.` : '성경 전체를 저장했습니다');
     render();
+    track('offline_download_completed', { total: books.length, failed });
   };
 
   const exportBackup = () => {
@@ -227,6 +240,11 @@ export async function settingsView(root) {
   };
 
   root.onclick = async (e) => {
+    // 사용설명서 링크는 그대로 열리게 두고 센다.
+    if (e.target.closest('.manual-link')) {
+      track('manual_opened');
+      return;
+    }
     const btn = e.target.closest('button');
     if (!btn) return;
     const d = btn.dataset;
@@ -234,9 +252,11 @@ export async function settingsView(root) {
       await setSetting('fontFamily', d.family);
       applyReadingSettings();
       render();
+      track('reading_setting_changed', { setting: 'font_family', value: d.family, surface: 'settings' });
     } else if (d.rate) {
       await setSetting('ttsRate', Number(d.rate));
       render();
+      track('reading_setting_changed', { setting: 'tts_rate', value: Number(d.rate), surface: 'settings' });
     } else if (d.action === 'tts-test') {
       player.unlock();
       player.load([{ text: '주님은 나의 목자시니, 내게 부족함 없어라. 시편 23편 1절', key: null, label: '' }]);
@@ -247,6 +267,7 @@ export async function settingsView(root) {
       downloadAll(btn);
     } else if (d.action === 'export') {
       exportBackup();
+      track('backup_exported');
     } else if (d.action === 'reset') {
       const ok = await confirmDialog({
         title: '모든 기록을 지울까요?',
@@ -257,9 +278,12 @@ export async function settingsView(root) {
       if (!ok) return;
       await resetAll();
       applyReadingSettings();
+      track('data_reset');
       toast('모든 기록을 지웠습니다');
       render();
     } else if (d.delete) {
+      // 지우기 전에 진도를 잡아 둔다 (사용 통계)
+      const p = listPlans().find((p) => p.id === Number(d.delete));
       const ok = await confirmDialog({
         title: '계획을 삭제할까요?',
         message: `${d.label} 계획과 읽음 기록이 지워집니다.`,
@@ -268,6 +292,13 @@ export async function settingsView(root) {
       });
       if (!ok) return;
       await deletePlan(Number(d.delete));
+      track('plan_deleted', () => ({
+        plan_mode: p.mode,
+        plan_length: p.length,
+        reading_days: p.readingDays,
+        read_days: p.readDays,
+        completion_pct: p.readingDays ? Math.round((p.readDays / p.readingDays) * 100) : 0,
+      }));
       toast('계획을 삭제했습니다');
       render();
     } else if (d.deleteAccount) {
@@ -280,6 +311,7 @@ export async function settingsView(root) {
       if (!ok) return;
       try {
         await deleteAccount(Number(d.deleteAccount));
+        track('account_deleted');
         toast('계정을 삭제했습니다');
       } catch (err) {
         toast(err.message);
@@ -295,12 +327,20 @@ export async function settingsView(root) {
   };
 
   root.onchange = async (e) => {
+    if (e.target.id === 'analytics-opt-in') {
+      setOptOut(!e.target.checked);
+      toast(e.target.checked ? '사용 통계를 보냅니다' : '사용 통계를 보내지 않습니다');
+      return;
+    }
     if (e.target.id === 'tts-voice') {
       await setSetting('ttsVoice', e.target.value || null);
+      // 음성 이름(URI)은 보내지 않고 직접 골랐는지만
+      track('reading_setting_changed', { setting: 'tts_voice', value: e.target.value ? 'chosen' : 'auto', surface: 'settings' });
       return;
     }
     if (e.target.id === 'font-size') {
       await setSetting('fontSize', Number(e.target.value));
+      track('reading_setting_changed', { setting: 'font_size', value: Number(e.target.value), surface: 'settings' });
       return;
     }
     if (e.target.dataset.rename) {
@@ -329,9 +369,11 @@ export async function settingsView(root) {
     try {
       await importFile(new Uint8Array(await file.arrayBuffer()));
       applyReadingSettings();
+      track('backup_imported');
       toast('백업을 가져왔습니다');
       render();
     } catch (err) {
+      track('backup_import_failed'); // 파일 이름과 오류 문구는 보내지 않는다
       toast(err.message);
     }
   };

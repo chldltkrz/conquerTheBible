@@ -4,6 +4,7 @@ import { book } from '../bible.js';
 import { getSetting, setSetting } from '../db.js';
 import { player, pickVoice, RATES, speechChunks, voicesReady } from '../tts.js';
 import { html, setHTML, toast } from '../ui.js';
+import { track } from '../analytics.js';
 
 const icon = (d, filled = false) =>
   html`<svg viewBox="0 0 24 24" aria-hidden="true" class="${filled ? 'is-filled' : ''}"><path d="${d}" /></svg>`;
@@ -100,8 +101,12 @@ export function createListening(root, verses) {
         renderBar();
         toast('오늘 분량을 끝까지 들었습니다');
         root.querySelector('#reader-foot')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        track('tts_completed', () => ({ rate: getSetting('ttsRate', 1) }));
       },
-      error: (code) => toast(`읽어 주기를 할 수 없습니다 (${code})`),
+      error: (code) => {
+        toast(`읽어 주기를 할 수 없습니다 (${code})`);
+        track('tts_error', { code: String(code) });
+      },
     });
   };
 
@@ -115,6 +120,12 @@ export function createListening(root, verses) {
       await load();
       const from = fromKey ? player.items.findIndex((it) => it.key === fromKey) : player.index;
       player.play(Math.max(0, from));
+      // 목소리는 이름 대신 직접 골랐는지만 보낸다.
+      track('tts_started', () => ({
+        from_selection: !!fromKey,
+        rate: getSetting('ttsRate', 1),
+        voice: getSetting('ttsVoice') ? 'chosen' : 'auto',
+      }));
     },
     async handle(action) {
       player.unlock();
@@ -131,6 +142,7 @@ export function createListening(root, verses) {
         player.setRate(rate);
         renderBar();
         await saving;
+        track('reading_setting_changed', { setting: 'tts_rate', value: rate, surface: 'tts_bar' });
       } else if (action === 'close') {
         player.pause();
         highlight(null);

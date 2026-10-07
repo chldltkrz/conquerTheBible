@@ -30,10 +30,11 @@ import {
   today,
   ymKey,
 } from '../dates.js';
-import { MAX_PLAN_DAYS, plansOverlapping, savePlan } from '../db.js';
+import { listPlans, MAX_PLAN_DAYS, plansOverlapping, savePlan } from '../db.js';
 import { buildGroupPlan, buildParallelPlan, buildPlan } from '../planner.js';
 import { confirmDialog, formatNumber, html, setHTML, toast } from '../ui.js';
 import { accountPrefix, dayDate, dayList, newPlanHref, periodLabel } from './common.js';
+import { track } from '../analytics.js';
 
 // 기간을 직접 정할 때 시작일부터 바로 고르는 길이
 const LENGTHS = [
@@ -115,6 +116,24 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
   const filledGroups = () => state.groups.map(selectionOf).filter((g) => Object.keys(g).length);
   const count = (code) => state.sel.get(code)?.size ?? 0;
   const isFull = (b) => count(b.code) === b.chapters.length;
+
+  /** 계획 이벤트 속성 (사용자가 입력한 계획 이름은 보내지 않는다) */
+  const planEventProps = () => {
+    const sel = planSelection();
+    const length = periodDays();
+    const totalChars = state.tracks.reduce((s, t) => s + t.days.reduce((a, x) => a + x.chars, 0), 0);
+    return {
+      plan_mode: state.mode,
+      plan_scope: describeSelection(sel),
+      period_kind: state.period, // 'month' | 'custom'
+      plan_length: length,
+      chapter_count: selectionToChapters(sel).length,
+      book_count: Object.keys(sel).length,
+      track_count: state.tracks.length,
+      minutes_per_day: readingMinutes(totalChars / length),
+      split_chapters: state.split,
+    };
+  };
 
   function selectGroup(i) {
     state.active = i;
@@ -553,6 +572,12 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     }
     const sel = planSelection();
     const title = state.title.trim() || describeSelection(sel);
+    let isFirstPlan = null;
+    try {
+      isFirstPlan = listPlans().length === 0;
+    } catch {
+      /* 사용 통계용 값이라 못 구해도 저장은 계속한다 */
+    }
     try {
       await savePlan({
         start,
@@ -568,6 +593,13 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
       toast(`저장하지 못했습니다: ${err.message}`);
       return;
     }
+    track('plan_created', () => ({
+      ...planEventProps(),
+      custom_title: state.titleEdited,
+      replaced_existing: overlaps.length > 0,
+      is_first_plan: isFirstPlan,
+      starts_in_days: daysBetween(now, start),
+    }));
     // 이번 계획에 필요한 책을 미리 받아 두면 오프라인에서도 읽을 수 있다.
     Promise.all(Object.keys(sel).map(loadBook)).catch(() => {});
     toast(`${isWholeMonth(start, end) ? `${start.m}월` : formatPeriod(start, end)} 계획을 만들었습니다`);
@@ -646,6 +678,7 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
           !isGroup() ? describeSelection(sel) : names.length <= 3 ? names.join(' · ') : `${names[0]} 외 ${names.length - 1}그룹`;
       }
       state.step = 'preview';
+      track('plan_previewed', planEventProps);
       window.scrollTo(0, 0);
       render();
       return;

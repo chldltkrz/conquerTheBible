@@ -16,6 +16,7 @@
     "node": ">=20"
   },
   "devDependencies": {
+    "posthog-js": "^1.438.2",
     "sql.js": "^1.14.2"
   }
 }

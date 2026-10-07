@@ -3,6 +3,7 @@
 import { book, chapterUnit, formatSegments, loadBook, readingMinutes } from '../bible.js';
 import { formatDay, formatTimestamp, ymKey } from '../dates.js';
 import {
+  currentAccount,
   getDayNote,
   getSetting,
   planOn,
@@ -25,10 +26,14 @@ import {
   isParallel,
   partUnit,
   readHref,
+  readingEventProps,
+  readSnapshot,
   shareIcon,
   shareVerses,
+  trackReadChange,
 } from './common.js';
 import { player } from '../tts.js';
+import { track, trackOnce } from '../analytics.js';
 import { createListening, playIcon, speakerIcon } from './listen.js';
 
 // 시가서는 한 절씩 줄을 나누어 보여 준다.
@@ -58,6 +63,9 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
   const title = formatSegments(entry.segments);
   const day = entry.day;
   const note = getDayNote({ y, m, d });
+  // 사용 통계: 본문을 연 뒤 읽음 표시까지 걸린 시간, 소리로 듣기를 썼는지
+  const openedAt = performance.now();
+  let ttsUsed = false;
 
   setHTML(
     root,
@@ -195,9 +203,12 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
 
   const saveSelection = async (save) => {
     const list = [...selected].map((k) => verses.get(k));
+    const fresh = save ? list.filter((x) => !savedHere.has(verseKey(x.b, x.c, x.v))) : []; // 새로 저장할 절
     try {
-      if (save) await saveVerses(plan.id, day, list.filter((x) => !savedHere.has(verseKey(x.b, x.c, x.v))));
-      else await unsaveVerses(plan.id, day, list);
+      if (save) {
+        await saveVerses(plan.id, day, fresh);
+        track('verses_saved', { surface: 'reader', count: fresh.length, plan_day: day });
+      } else await unsaveVerses(plan.id, day, list);
     } catch (err) {
       toast(`저장하지 못했습니다: ${err.message}`);
       return;
@@ -215,12 +226,14 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
       const size = getSetting('fontSize', FONT_SIZE.default) + Number(font.dataset.font);
       if (size < FONT_SIZE.min || size > FONT_SIZE.max) return;
       await setSetting('fontSize', size);
+      track('reading_setting_changed', { setting: 'font_size', value: size, surface: 'reader' });
       applyReadingSettings();
       return;
     }
     const tts = e.target.closest('[data-tts]')?.dataset.tts;
     if (tts) return listening?.handle(tts);
     const action = e.target.closest('[data-action]')?.dataset.action;
+    if (action === 'listen' || action === 'listen-from') ttsUsed = true;
     if (action === 'listen') return listening?.open();
     if (action === 'listen-from') {
       // 선택한 절 중 본문에서 가장 앞에 있는 절부터 읽는다.
@@ -231,7 +244,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     }
     if (action === 'save' || action === 'unsave') return saveSelection(action === 'save');
     // 공유한 뒤에도 선택은 그대로 두어 이어서 저장할 수 있게 한다.
-    if (action === 'share') return shareVerses([...selected].map((k) => verses.get(k)));
+    if (action === 'share') return shareVerses([...selected].map((k) => verses.get(k)), 'reader');
     if (action === 'clear-selection') {
       selected.clear();
       repaint();
@@ -254,6 +267,8 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     try {
       const at = await saveDayNote({ y, m, d }, title, text);
       memoStatus.textContent = at ? `${formatTimestamp(at)} 저장` : '메모를 지웠습니다';
+      // 자동 저장이 입력을 멈출 때마다 일어나므로 그날 한 번만 보낸다
+      if (at) trackOnce(`day_note:${currentAccount().id}:${y}-${m}-${d}`, 'day_note_created', { length: text.trim().length });
     } catch (err) {
       savedMemo = null; // 다음 입력 때 다시 시도
       memoStatus.textContent = `저장하지 못했습니다: ${err.message}`;
@@ -285,7 +300,16 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     const track = btn.dataset.track == null ? null : Number(btn.dataset.track);
     const targets = track == null ? parts : parts.filter((p) => p.track === track);
     try {
+      const snap = readSnapshot(plan.id);
       const readAt = await setRead(plan.id, day, read, track);
+      trackReadChange(snap, {
+        planId: plan.id,
+        day,
+        track,
+        read,
+        surface: 'reader',
+        extra: { reading_seconds: Math.min(3600, Math.round((performance.now() - openedAt) / 1000)), tts_used: ttsUsed },
+      });
       for (const p of targets) {
         if (!read) p.readAt = null;
         else p.readAt ??= readAt;
@@ -328,11 +352,13 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     );
     parts.forEach(renderTrackFoot);
     article.removeAttribute('aria-busy');
+    track('reading_opened', () => ({ ...readingEventProps(plan, day), already_read: !!dayReadAt() }));
     repaint();
     // 오늘 화면에서 특정 책을 눌러 들어왔으면 그 책 부분으로 내려간다.
     if (focusTrack != null) root.querySelector(`#track-${focusTrack}`)?.scrollIntoView();
   } catch (err) {
     if (!isCurrent()) return;
+    track('reading_load_failed', () => ({ books: [...new Set(entry.segments.map((s) => s.b))], online: navigator.onLine }));
     setHTML(
       article,
       html`<p class="error">${err.message}</p>
