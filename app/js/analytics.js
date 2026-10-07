@@ -14,8 +14,12 @@ const ONCE_KEY = 'ctb-analytics-once';
 const MAX_QUEUE = 200;
 
 const hasWindow = typeof window !== 'undefined';
-const isLocalHost = () =>
-  hasWindow && /^(localhost|127\.|\[::1\]|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(location.hostname);
+
+/** 개발·테스트용 주소인지: localhost, 사설 IP, 그리고 .test·.local 같은 실제로 쓰이지 않는 도메인(ctb.test 등) */
+export const isDevHostname = (hostname) =>
+  /^(localhost|127\.|\[::1\]|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostname) ||
+  /\.(test|local|localhost|example|invalid|internal)$/i.test(hostname);
+const isLocalHost = () => hasWindow && isDevHostname(location.hostname);
 
 let ph = null; // 불러온 posthog 인스턴스
 let started = false;

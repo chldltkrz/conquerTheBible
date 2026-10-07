@@ -6,6 +6,7 @@ import { useIndex } from '../app/js/bible.js';
 import { addDays, today } from '../app/js/dates.js';
 import { getPlan, listPlans, savePlan, setRead, useMemoryDatabase } from '../app/js/db.js';
 import { openedProps, readingEventProps } from '../app/js/views/common.js';
+import { isDevHostname } from '../app/js/analytics.js';
 
 const INDEX_PATH = new URL('../app/data/index.json', import.meta.url);
 const skip = !fs.existsSync(INDEX_PATH) && 'app/data/index.json 없음';
@@ -64,4 +65,11 @@ test('계획이 없으면 no_plan', { skip }, () => {
 test('getPlan: 없는 id면 null', () => {
   useMemoryDatabase(new SQL.Database());
   assert.equal(getPlan(999), null);
+});
+
+test('개발·테스트 주소에서는 보내지 않는다', () => {
+  for (const host of ['localhost', '127.0.0.1', '192.168.0.5', '10.0.0.2', '172.20.1.1', 'ctb.test', 'CTB.TEST', 'ctb.local', 'app.localhost'])
+    assert.ok(isDevHostname(host), host);
+  for (const host of ['t.teem0.com', 'test.example.com', 'ctb.tester.com', '172.32.0.1'])
+    assert.ok(!isDevHostname(host), host);
 });

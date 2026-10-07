@@ -97,7 +97,7 @@ npm run icons    # 앱 아이콘 다시 그리기
 - 보내지 않는 것: 계정 이름, 계획 이름, 묵상 메모·구절 메모 내용, 절 본문, 검색어, 백업 파일 이름, 음성 이름.
   책 코드(`gen`, `psa` 등), 개수, 날짜 차이, 참/거짓, 기기 안의 계정 번호만 보냅니다.
 - 설정 화면의 "익명 사용 통계 보내기"를 끄면 아무것도 보내지 않습니다.
-- localhost와 사설 IP에서 열면 보내지 않고 브라우저 콘솔에 `[analytics]`로만 출력합니다 (콘솔 수준 "Verbose"에서 보임).
+- localhost, 사설 IP, `.test`·`.local` 같은 테스트 도메인(예: `ctb.test`)에서 열면 보내지 않고 브라우저 콘솔에 `[analytics]`로만 출력합니다 (콘솔 수준 "Verbose"에서 보임).
 - PostHog 프로젝트 키와 서버 주소는 `app/js/analytics.js` 맨 위의 `POSTHOG_KEY`, `POSTHOG_HOST`에 있습니다.
 
 ## 폴더 구조
