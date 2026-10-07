@@ -27,7 +27,7 @@ const manualIcon = html`<svg viewBox="0 0 24 24"><path d="M4 5.5C4 4.7 4.7 4 5.5
 // sw.js의 DATA_CACHE와 같은 이름이어야 한다.
 const DATA_CACHE = 'bible-data-v1';
 
-export async function settingsView(root) {
+export async function settingsView(root, _params, { isCurrent }) {
   let downloading = false;
 
   const cachedBookCount = async () => {
@@ -48,6 +48,8 @@ export async function settingsView(root) {
     const voices = player ? (await voicesReady(), koreanVoices()) : [];
     const voiceURI = getSetting('ttsVoice');
     const rate = getSetting('ttsRate', 1);
+    // 기다리는 동안(목소리 목록은 최대 1.5초, 성경 전체 저장은 몇 초) 다른 화면으로 옮겼으면 그 화면을 덮어쓰지 않는다.
+    if (!isCurrent()) return;
 
     setHTML(
       root,

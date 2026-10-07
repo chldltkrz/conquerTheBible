@@ -197,15 +197,15 @@ export function dayRow(plan, entry, now) {
   const cmp = compareDate(date, now);
   const state = entry.readAt ? 'read' : rest ? 'rest' : cmp < 0 ? 'missed' : cmp === 0 ? 'today' : 'upcoming';
   const partial = !entry.readAt && entry.readParts > 0;
+  const content = html`${dayDate(date)}
+    <span class="day-ref">
+      ${rest ? (entry.moved ? '분량을 뒤로 옮김' : '쉬는 날') : formatSegments(entry.segments)}
+      ${partial ? html`<small class="partial-note">${entry.readParts}/${entry.parts.length}${partUnit(plan)} 읽음</small>` : ''}
+    </span>
+    ${rest ? '' : html`<span class="day-min">${readingMinutes(entry.chars)}분</span>`}`;
+  // 쉬는 날은 열 본문이 없으므로 링크로 만들지 않는다. (href="#"이면 눌렀을 때 오늘 화면으로 넘어간다)
   return html`<li class="day-row is-${state} ${entry.moved ? 'is-moved' : ''}">
-    <a class="day-link" href="${rest ? '#' : readHref(date)}" ${rest ? html`aria-disabled="true"` : ''}>
-      ${dayDate(date)}
-      <span class="day-ref">
-        ${rest ? (entry.moved ? '분량을 뒤로 옮김' : '쉬는 날') : formatSegments(entry.segments)}
-        ${partial ? html`<small class="partial-note">${entry.readParts}/${entry.parts.length}${partUnit(plan)} 읽음</small>` : ''}
-      </span>
-      ${rest ? '' : html`<span class="day-min">${readingMinutes(entry.chars)}분</span>`}
-    </a>
+    ${rest ? html`<span class="day-link">${content}</span>` : html`<a class="day-link" href="${readHref(date)}">${content}</a>`}
     ${rest
       ? ''
       : html`<button class="check ${entry.readAt ? 'on' : partial ? 'partial' : ''}" data-action="toggle-read"
