@@ -1730,6 +1730,34 @@ main:focus-visible {
   font-size: 13px;
 }
 
+.saved-actions {
+  flex: none;
+  display: flex;
+  gap: 14px;
+}
+
+.saved-actions .link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.saved-actions svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* 선택 바가 떠 있으면 토스트가 바를 가리지 않도록 그 위에 띄운다. */
+body:has(.select-bar:not([hidden])) .toast {
+  bottom: calc(var(--tabbar-h) + var(--safe-b) + 84px);
+}
+
+.select-bar .select-clear {
+  width: 36px;
+  height: 36px;
+  font-size: 16px;
+}
+
 /* ── 병렬 읽기 ────────────────────────────────────────── */
 .mode-tabs {
   display: flex;

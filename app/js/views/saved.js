@@ -4,7 +4,7 @@ import { book } from '../bible.js';
 import { formatTimestamp } from '../dates.js';
 import { deleteSavedVerse, listSavedVerses } from '../db.js';
 import { confirmDialog, html, setHTML, toast } from '../ui.js';
-import { accountChip } from './common.js';
+import { accountChip, shareIcon, shareVerses } from './common.js';
 
 const SORTS = [
   { id: 'count', label: '많이 저장한 순' },
@@ -70,7 +70,10 @@ export async function savedView(root) {
                   <summary>${x.times > 1 ? `저장한 날 ${x.times}번 · 최근 ` : ''}${formatTimestamp(x.lastAt)}</summary>
                   <ol>${x.dates.map((t) => html`<li>${formatTimestamp(t)}</li>`)}</ol>
                 </details>
-                <button class="link danger" data-delete="${x.b}:${x.c}:${x.v}" data-label="${verseRef(x)}">삭제</button>
+                <span class="saved-actions">
+                  <button class="link" data-share="${x.b}:${x.c}:${x.v}">${shareIcon}<span>공유</span></button>
+                  <button class="link danger" data-delete="${x.b}:${x.c}:${x.v}" data-label="${verseRef(x)}">삭제</button>
+                </span>
               </div>
             </li>`,
           )}
@@ -81,6 +84,12 @@ export async function savedView(root) {
   root.onclick = async (e) => {
     const btn = e.target.closest('button');
     if (!btn) return;
+    if (btn.dataset.share) {
+      const [b, c, v] = btn.dataset.share.split(':');
+      const x = listSavedVerses().find((s) => s.b === b && s.c === Number(c) && s.v === Number(v));
+      if (x) shareVerses([x]);
+      return;
+    }
     if (btn.dataset.sort) {
       sort = btn.dataset.sort;
       render();

@@ -15,7 +15,17 @@ import {
 } from '../db.js';
 import { FONT_SIZE, applyReadingSettings } from '../prefs.js';
 import { html, setHTML, toast } from '../ui.js';
-import { accountPrefix, bookmarkIcon, checkIcon, entryOn, isParallel, partUnit, readHref } from './common.js';
+import {
+  accountPrefix,
+  bookmarkIcon,
+  checkIcon,
+  entryOn,
+  isParallel,
+  partUnit,
+  readHref,
+  shareIcon,
+  shareVerses,
+} from './common.js';
 
 // 시가서는 한 절씩 줄을 나누어 보여 준다.
 const POETRY = new Set(['job', 'psa', 'pro', 'sng', 'lam']);
@@ -143,10 +153,11 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     setHTML(
       bar,
       html`<span class="select-count"><b>${selected.size}절</b> 선택</span>
-        <button class="btn btn-ghost btn-sm" data-action="clear-selection">선택 해제</button>
+        <button class="btn btn-ghost btn-sm" data-action="share">${shareIcon}<span>공유</span></button>
         ${allSaved
           ? html`<button class="btn btn-ghost btn-sm" data-action="unsave">저장 취소</button>`
-          : html`<button class="btn btn-primary btn-sm" data-action="save">${bookmarkIcon}<span>저장</span></button>`}`,
+          : html`<button class="btn btn-primary btn-sm" data-action="save">${bookmarkIcon}<span>저장</span></button>`}
+        <button class="icon-btn select-clear" data-action="clear-selection" aria-label="선택 해제">✕</button>`,
     );
   };
 
@@ -190,6 +201,8 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     }
     const action = e.target.closest('[data-action]')?.dataset.action;
     if (action === 'save' || action === 'unsave') return saveSelection(action === 'save');
+    // 공유한 뒤에도 선택은 그대로 두어 이어서 저장할 수 있게 한다.
+    if (action === 'share') return shareVerses([...selected].map((k) => verses.get(k)));
     if (action === 'clear-selection') {
       selected.clear();
       repaint();

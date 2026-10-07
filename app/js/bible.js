@@ -12,7 +12,12 @@ const bookCache = new Map();
 export async function loadIndex() {
   const res = await fetch('data/index.json');
   if (!res.ok) throw new Error(`성경 데이터(index.json)를 불러오지 못했습니다 (${res.status})`);
-  index = await res.json();
+  return useIndex(await res.json());
+}
+
+/** 불러온 index.json을 쓴다. (테스트에서는 파일을 직접 읽어 넘긴다) */
+export function useIndex(data) {
+  index = data;
   byCode = new Map(index.books.map((b, i) => [b.code, { ...b, order: i }]));
   return index;
 }
@@ -156,4 +161,49 @@ function formatRange({ b, sc, sv, ec, ev }, short) {
   const endV = endCh.e?.[lastV] ?? lastV; // 묶인 절(예: 30-32)이면 끝 번호까지
   if (sc === ec) return startV === endV ? `${sc}:${startV}` : `${sc}:${startV}–${endV}`;
   return `${sc}:${startV}–${ec}:${endV}`;
+}
+
+// ── 공유 ───────────────────────────────────────────────────
+
+/** x가 p 바로 다음 절인지 (빠진 절·묶인 절은 성경 데이터의 절 목록을 따른다) */
+function follows(p, x) {
+  if (p.b !== x.b) return false;
+  const chapters = book(p.b).chapters;
+  const pNums = verseNumbers(chapters[p.c - 1]);
+  if (p.c === x.c) return pNums.indexOf(x.v) === pNums.indexOf(p.v) + 1;
+  return x.c === p.c + 1 && p.v === pNums.at(-1) && x.v === verseNumbers(chapters[x.c - 1])[0];
+}
+
+/**
+ * 공유할 문구 "말씀 - 책 장:절". 여러 절이면 본문을 이어 붙이고 절 범위로 적는다.
+ * 떨어진 절 사이의 본문은 " … "로 잇는다.
+ *   시 23:1           → "주님은 나의 목자시니, 내게 부족함 없어라. - 시편 23:1"
+ *   마 5:3, 5:4, 5:9  → "… … … … - 마태복음서 5:3-4, 9"
+ *   시 23:1, 요 3:16  → "… … … - 시편 23:1; 요한복음서 3:16"
+ * @param {Array<{b, c, v, e?, t}>} verses 순서는 상관없다 (성경 순서로 정렬한다)
+ */
+export function shareText(verses) {
+  const sorted = [...verses].sort((x, y) => book(x.b).order - book(y.b).order || x.c - y.c || x.v - y.v);
+  const runs = [];
+  for (const x of sorted) {
+    const run = runs.at(-1);
+    if (run && follows(run.at(-1), x)) run.push(x);
+    else runs.push([x]);
+  }
+
+  let ref = '';
+  let last = null; // 앞 묶음의 마지막 절
+  for (const run of runs) {
+    const a = run[0];
+    const z = run.at(-1);
+    const end = z.e ?? z.v; // 묶인 절(30-32)이면 끝 번호까지
+    const sameBook = last?.b === a.b;
+    const sameChapter = sameBook && last.c === a.c;
+    const start = sameChapter ? `${a.v}` : `${a.c}:${a.v}`;
+    const tail = a.c !== z.c ? `-${z.c}:${end}` : end !== a.v ? `-${end}` : '';
+    ref += (last ? (sameChapter ? ', ' : '; ') : '') + (sameBook ? '' : `${book(a.b).name} `) + start + tail;
+    last = z;
+  }
+  const text = runs.map((run) => run.map((x) => x.t).join(' ')).join(' … ');
+  return `${text} - ${ref}`;
 }

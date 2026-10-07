@@ -1,6 +1,6 @@
 // 여러 화면에서 함께 쓰는 조각들
 
-import { book, chapterUnit, formatSegments, readingMinutes } from '../bible.js';
+import { book, chapterUnit, formatSegments, readingMinutes, shareText } from '../bible.js';
 import {
   addDays,
   compareDate,
@@ -25,7 +25,7 @@ import {
   setRead,
   switchAccount,
 } from '../db.js';
-import { html, josa, setHTML, toast } from '../ui.js';
+import { copyText, html, josa, setHTML, toast } from '../ui.js';
 
 /** 본문 화면 주소. track을 주면 그 책 부분으로 바로 내려간다. */
 export const readHref = ({ y, m, d }, track) => `#/read/${ymKey(y, m)}/${d}${track == null ? '' : `/${track}`}`;
@@ -49,6 +49,13 @@ export const dayLabel = (plan, entry) => (isMonthPlan(plan) ? `${entry.day}일�
 
 export const checkIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>`;
 export const bookmarkIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10a1 1 0 0 1 1 1v15l-6-4-6 4V5a1 1 0 0 1 1-1z" /></svg>`;
+export const shareIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3M7.5 7.5 12 3l4.5 4.5M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" /></svg>`;
+
+/** 절들을 "말씀 - 책 장:절" 형식으로 클립보드에 복사하고 알린다. */
+export async function shareVerses(verses) {
+  const ok = await copyText(shareText(verses));
+  toast(ok ? '말씀을 클립보드에 복사했습니다' : '복사하지 못했습니다. 브라우저의 클립보드 권한을 확인해 주세요');
+}
 
 // ── 계정 ───────────────────────────────────────────────────
 

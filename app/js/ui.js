@@ -78,6 +78,34 @@ export function confirmDialog({ title, message, confirmText = '확인', danger =
 
 export const formatNumber = (n) => n.toLocaleString('ko-KR');
 
+/** 클립보드에 복사한다. 성공하면 true */
+export async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // 권한이 없으면 아래 방식으로 다시 시도한다.
+  }
+  // HTTPS가 아닌 주소(같은 Wi-Fi의 http://192.168…)에서는 clipboard API를 쓸 수 없어 예전 방식으로 복사한다.
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+  document.body.append(ta);
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch {
+    ok = false;
+  }
+  ta.remove();
+  return ok;
+}
+
 /** 받침에 맞는 조사: josa('창세기', '을', '를') → '를', josa('시편', '을', '를') → '을' */
 export function josa(word, withFinal, withoutFinal) {
   const code = word.charCodeAt(word.length - 1) - 0xac00;
