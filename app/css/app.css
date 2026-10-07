@@ -2300,6 +2300,145 @@ mark {
   color: var(--ink);
 }
 
+/* ── 소리로 듣기 ──────────────────────────────────────── */
+svg.is-filled {
+  fill: currentColor;
+  stroke: none;
+}
+
+.listen-btn svg {
+  width: 24px;
+  height: 24px;
+}
+
+.tts-bar {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--tabbar-h) + var(--safe-b) + 12px);
+  z-index: 31;
+  width: min(calc(100% - 24px), 560px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 6px 6px 4px;
+  border-radius: 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
+}
+
+.tts-bar[hidden] {
+  display: none;
+}
+
+.tts-bar .icon-btn {
+  width: 40px;
+  height: 40px;
+}
+
+.tts-bar .icon-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.tts-play {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.tts-play svg {
+  width: 22px;
+  height: 22px;
+}
+
+.tts-play span {
+  display: grid;
+  place-items: center;
+}
+
+.tts-play .when-playing,
+.tts-play.is-playing .when-paused {
+  display: none;
+}
+
+.tts-play.is-playing .when-playing {
+  display: grid;
+}
+
+.tts-now {
+  flex: 1;
+  min-width: 0;
+  padding: 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tts-rate {
+  flex: none;
+  min-width: 48px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.tts-bar .tts-close {
+  font-size: 16px;
+}
+
+/* 플레이어 바가 떠 있으면 선택 바와 토스트를 그 위로 올린다. */
+body:has(.tts-bar:not([hidden])) .select-bar {
+  bottom: calc(var(--tabbar-h) + var(--safe-b) + 80px);
+}
+
+body:has(.tts-bar:not([hidden])) .toast {
+  bottom: calc(var(--tabbar-h) + var(--safe-b) + 84px);
+}
+
+body:has(.tts-bar:not([hidden])):has(.select-bar:not([hidden])) .toast {
+  bottom: calc(var(--tabbar-h) + var(--safe-b) + 150px);
+}
+
+/* 바에 가려지지 않게 본문 아래 여백을 늘린다. */
+body:has(.tts-bar:not([hidden])) main {
+  padding-bottom: calc(var(--tabbar-h) + var(--safe-b) + 100px);
+}
+
+.scripture .verse.is-speaking {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.select {
+  max-width: 60%;
+  height: 38px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+
+.tts-note {
+  margin-top: 10px !important;
+}
+
 /* ── 대화상자·토스트 ──────────────────────────────────── */
 .dialog {
   width: min(92vw, 380px);

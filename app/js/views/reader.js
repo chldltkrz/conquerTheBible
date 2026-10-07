@@ -28,6 +28,8 @@ import {
   shareIcon,
   shareVerses,
 } from './common.js';
+import { player } from '../tts.js';
+import { createListening, playIcon, speakerIcon } from './listen.js';
 
 // 시가서는 한 절씩 줄을 나누어 보여 준다.
 const POETRY = new Set(['job', 'psa', 'pro', 'sng', 'lam']);
@@ -65,6 +67,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
           <small>${accountPrefix()}${formatDay(y, m, d)} · ${idx + 1}/${readingDays.length}</small>
           <b>${title}</b>
         </div>
+        ${player ? html`<button class="icon-btn listen-btn" data-action="listen" aria-label="소리로 듣기">${speakerIcon}</button>` : ''}
         <div class="font-ctl" role="group" aria-label="글자 크기">
           <button class="icon-btn" data-font="-1" aria-label="글자 작게">가<sup>−</sup></button>
           <button class="icon-btn" data-font="1" aria-label="글자 크게">가<sup>+</sup></button>
@@ -83,7 +86,8 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
           placeholder="말씀을 읽으며 받은 은혜, 결단, 기도 제목을 적어 보세요">${note?.text ?? ''}</textarea>
       </section>
       <footer class="reader-foot" id="reader-foot"></footer>
-      <div class="select-bar" id="select-bar" hidden></div>`,
+      <div class="select-bar" id="select-bar" hidden></div>
+      <div class="tts-bar" id="tts-bar" role="region" aria-label="소리로 듣기" hidden></div>`,
   );
 
   // ── 읽음 완료 ────────────────────────────────────────────
@@ -156,6 +160,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     el.querySelector('.vcount').title = n ? `${n}번 저장한 절` : '';
   };
 
+  const listening = createListening(root, verses);
   const bar = root.querySelector('#select-bar');
   const renderBar = () => {
     bar.hidden = selected.size === 0;
@@ -164,6 +169,9 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     setHTML(
       bar,
       html`<span class="select-count"><b>${selected.size}절</b> 선택</span>
+        ${player
+          ? html`<button class="icon-btn" data-action="listen-from" aria-label="선택한 절부터 듣기">${playIcon}</button>`
+          : ''}
         <button class="btn btn-ghost btn-sm" data-action="share">${shareIcon}<span>공유</span></button>
         ${allSaved
           ? html`<button class="btn btn-ghost btn-sm" data-action="unsave">저장 취소</button>`
@@ -210,7 +218,17 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
       applyReadingSettings();
       return;
     }
+    const tts = e.target.closest('[data-tts]')?.dataset.tts;
+    if (tts) return listening?.handle(tts);
     const action = e.target.closest('[data-action]')?.dataset.action;
+    if (action === 'listen') return listening?.open();
+    if (action === 'listen-from') {
+      // 선택한 절 중 본문에서 가장 앞에 있는 절부터 읽는다.
+      const first = [...root.querySelectorAll('.verse.is-selected')][0]?.dataset.ref;
+      selected.clear();
+      repaint();
+      return listening?.open(first);
+    }
     if (action === 'save' || action === 'unsave') return saveSelection(action === 'save');
     // 공유한 뒤에도 선택은 그대로 두어 이어서 저장할 수 있게 한다.
     if (action === 'share') return shareVerses([...selected].map((k) => verses.get(k)));
@@ -334,6 +352,8 @@ function renderSegment(seg, bookData, verses) {
   const heading = whole
     ? `${book(seg.b).name} ${seg.c}${unit}`
     : `${book(seg.b).name} ${seg.c}${unit} ${list[0].v}–${last.e ?? last.v}절`;
+  // 소리로 들을 때 읽는 장 제목 ("–"를 읽지 않도록 따로 만든다)
+  const speak = whole ? heading : `${book(seg.b).name} ${seg.c}${unit} ${list[0].v}절부터`;
 
   // 단락 제목·시편 표제는 해당 절 앞에서 문단을 새로 시작한다.
   const headsAt = new Map();
@@ -367,7 +387,7 @@ function renderSegment(seg, bookData, verses) {
 
   const notes = ch.notes.filter((n) => (n.v === 0 ? whole || seg.from === ch.verses[0].v : inRange(n.v)));
   return html`<section class="chapter">
-    <h2 class="chapter-title">${heading}</h2>
+    <h2 class="chapter-title" data-speak="${speak}">${heading}</h2>
     ${blocks}
     ${notes.length
       ? html`<details class="notes">

@@ -26,6 +26,8 @@ const SHELL_FILES = [
   'js/views/saved.js',
   'js/views/notes.js',
   'js/views/search.js',
+  'js/views/listen.js',
+  'js/tts.js',
   'vendor/sql-wasm-browser.js',
   'vendor/sql-wasm-browser.wasm',
   'icons/icon.svg',

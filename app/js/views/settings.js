@@ -18,6 +18,8 @@ import {
 import { FONT_SIZE, applyReadingSettings } from '../prefs.js';
 import { confirmDialog, html, setHTML, toast } from '../ui.js';
 import { avatar, isMonthPlan, periodLabel } from './common.js';
+import { koreanVoices, pickVoice, player, RATES, voicesReady } from '../tts.js';
+import { rateLabel, speakerIcon } from './listen.js';
 
 // sw.js의 DATA_CACHE와 같은 이름이어야 한다.
 const DATA_CACHE = 'bible-data-v1';
@@ -40,6 +42,9 @@ export async function settingsView(root) {
     const size = getSetting('fontSize', FONT_SIZE.default);
     const family = getSetting('fontFamily', 'serif');
     const cached = await cachedBookCount();
+    const voices = player ? (await voicesReady(), koreanVoices()) : [];
+    const voiceURI = getSetting('ttsVoice');
+    const rate = getSetting('ttsRate', 1);
 
     setHTML(
       root,
@@ -84,6 +89,38 @@ export async function settingsView(root) {
             <p class="sample">주님은 나의 목자시니, 내게 부족함 없어라.</p>
           </div>
         </section>
+
+        ${player
+          ? html`<section class="block">
+              <h2 class="block-title">소리로 듣기</h2>
+              <div class="card">
+                <label class="field-row">
+                  <span>목소리</span>
+                  <select id="tts-voice" class="select">
+                    <option value="">자동 (기기 안의 한국어 음성)</option>
+                    ${voices.map(
+                      (v) => html`<option value="${v.voiceURI}" ${v.voiceURI === voiceURI ? 'selected' : ''}>
+                        ${v.name}${v.localService ? '' : ' · 인터넷 필요'}</option>`,
+                    )}
+                  </select>
+                </label>
+                <div class="field-row">
+                  <span>속도</span>
+                  <div class="segmented" role="radiogroup" aria-label="읽는 속도">
+                    ${RATES.map(
+                      (r) => html`<button role="radio" data-rate="${r}" aria-checked="${r === rate}">${rateLabel(r)}</button>`,
+                    )}
+                  </div>
+                </div>
+                <button class="btn btn-ghost btn-sm" data-action="tts-test">${speakerIcon}<span>들어 보기</span></button>
+                <p class="muted small tts-note">
+                  ${voices.length
+                    ? '브라우저에 들어 있는 음성으로 읽어 줍니다. "인터넷 필요"로 표시된 음성은 브라우저가 인터넷으로 소리를 만듭니다.'
+                    : '이 기기에서 한국어 음성을 찾지 못했습니다. 기기 설정에서 한국어 음성(TTS)을 설치하면 자연스럽게 읽습니다.'}
+                </p>
+              </div>
+            </section>`
+          : ''}
 
         <section class="block">
           <h2 class="block-title">오프라인에서 읽기</h2>
@@ -189,6 +226,15 @@ export async function settingsView(root) {
       await setSetting('fontFamily', d.family);
       applyReadingSettings();
       render();
+    } else if (d.rate) {
+      await setSetting('ttsRate', Number(d.rate));
+      render();
+    } else if (d.action === 'tts-test') {
+      player.unlock();
+      player.load([{ text: '주님은 나의 목자시니, 내게 부족함 없어라. 시편 23편 1절', key: null, label: '' }]);
+      player.setVoice(pickVoice(getSetting('ttsVoice')));
+      player.setRate(getSetting('ttsRate', 1));
+      player.play(0);
     } else if (d.action === 'download') {
       downloadAll(btn);
     } else if (d.action === 'export') {
@@ -241,6 +287,10 @@ export async function settingsView(root) {
   };
 
   root.onchange = async (e) => {
+    if (e.target.id === 'tts-voice') {
+      await setSetting('ttsVoice', e.target.value || null);
+      return;
+    }
     if (e.target.id === 'font-size') {
       await setSetting('fontSize', Number(e.target.value));
       return;

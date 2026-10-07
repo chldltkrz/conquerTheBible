@@ -12,6 +12,7 @@ import { savedView } from './views/saved.js';
 import { notesView } from './views/notes.js';
 import { searchView } from './views/search.js';
 import { changeAccount, openAccountSwitcher } from './views/common.js';
+import { player } from './tts.js';
 
 const main = document.getElementById('main');
 
@@ -47,6 +48,8 @@ async function route() {
   const params = match.m.slice(1).map((x) => (x == null ? undefined : Number(x)));
   // 화면들은 main에 이벤트 핸들러 속성(onclick 등)을 직접 단다. 이전 화면 것을 지운다.
   main.onclick = main.oninput = main.onchange = main.onsubmit = main.onkeydown = null;
+  player?.stop(); // 소리로 듣던 것은 화면을 옮기면 멈춘다
+
   window.scrollTo(0, 0);
   try {
     // 화면마다 main 영역을 통째로 다시 그린다. 이전 화면의 비동기 작업이 늦게 끝나도
