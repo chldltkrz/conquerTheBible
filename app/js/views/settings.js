@@ -21,6 +21,8 @@ import { avatar, isMonthPlan, periodLabel } from './common.js';
 import { koreanVoices, pickVoice, player, RATES, voicesReady } from '../tts.js';
 import { rateLabel, speakerIcon } from './listen.js';
 
+const manualIcon = html`<svg viewBox="0 0 24 24"><path d="M4 5.5C4 4.7 4.7 4 5.5 4H10a2 2 0 0 1 2 2v14a1.5 1.5 0 0 0-1.5-1.5H4zM20 5.5c0-.8-.7-1.5-1.5-1.5H14a2 2 0 0 0-2 2v14a1.5 1.5 0 0 1 1.5-1.5H20z" /></svg>`;
+
 // sw.js의 DATA_CACHE와 같은 이름이어야 한다.
 const DATA_CACHE = 'bible-data-v1';
 
@@ -49,6 +51,12 @@ export async function settingsView(root) {
     setHTML(
       root,
       html`<header class="page-head"><h1>설정</h1></header>
+
+        <a class="card card-link manual-link" href="docs/user-manual.pdf" target="_blank" rel="noopener">
+          <span class="manual-icon" aria-hidden="true">${manualIcon}</span>
+          <span><b>사용설명서</b><small>메뉴마다 화면 사진과 함께 쓰는 법을 설명합니다 · PDF</small></span>
+          <span class="chev" aria-hidden="true">›</span>
+        </a>
 
         <section class="block">
           <h2 class="block-title">계정</h2>

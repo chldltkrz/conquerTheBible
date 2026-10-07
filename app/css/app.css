@@ -2439,6 +2439,32 @@ body:has(.tts-bar:not([hidden])) main {
   margin-top: 10px !important;
 }
 
+/* ── 설정: 사용설명서 ─────────────────────────────────── */
+.manual-link {
+  margin: -4px 0 0;
+  justify-content: flex-start;
+}
+
+.manual-link > span:nth-child(2) {
+  flex: 1;
+}
+
+.manual-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.manual-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
 /* ── 대화상자·토스트 ──────────────────────────────────── */
 .dialog {
   width: min(92vw, 380px);

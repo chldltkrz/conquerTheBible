@@ -33,6 +33,9 @@
   한 사람이 "신약", "시편"처럼 여러 범위를 계정으로 나누어 번갈아 읽을 수 있습니다.
   오늘 화면에서 다른 계정의 오늘 분량과 읽음 여부를 보고 바로 바꿀 수 있습니다.
 
+사용자용 설명서(실제 화면 사진과 메뉴별 사용법, PDF 23쪽)는 [app/docs/user-manual.pdf](app/docs/user-manual.pdf)에 있고,
+앱의 **설정 > 사용설명서**에서 바로 열 수 있습니다.
+
 ## 시작하기
 
 Node.js 20 이상이 필요합니다.
@@ -97,6 +100,7 @@ app/                  배포할 정적 사이트 (PWA)
   js/bible.js         본문 불러오기, 구절 표기
   js/views/           화면 (오늘, 달력, 구절, 새 계획, 본문, 설정)
   data/               크롤링한 새번역 본문 (index.json + books/*.json)
+  docs/user-manual.pdf 사용설명서 (설정 화면에서 연다)
 scripts/
   crawl.mjs           새번역 크롤러, lib/parse.mjs 파서
   serve.mjs           개발용 정적 서버
