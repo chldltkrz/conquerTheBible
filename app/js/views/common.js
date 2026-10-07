@@ -1,6 +1,6 @@
 // 여러 화면에서 함께 쓰는 조각들
 
-import { book, chapterUnit, formatSegments, readingMinutes, shareText } from '../bible.js';
+import { book, chapterUnit, formatSegments, getIndex, readingMinutes, shareText } from '../bible.js';
 import {
   addDays,
   compareDate,
@@ -19,6 +19,7 @@ import {
   currentAccount,
   listAccounts,
   listPlans,
+  movedDates,
   planOn,
   readDates,
   scheduledDates,
@@ -26,6 +27,7 @@ import {
   switchAccount,
 } from '../db.js';
 import { copyText, html, josa, setHTML, toast } from '../ui.js';
+import { rebalanceTrack } from '../planner.js';
 
 /** 본문 화면 주소. track을 주면 그 책 부분으로 바로 내려간다. */
 export const readHref = ({ y, m, d }, track) => `#/read/${ymKey(y, m)}/${d}${track == null ? '' : `/${track}`}`;
@@ -190,11 +192,11 @@ export function dayRow(plan, entry, now) {
   const cmp = compareDate(date, now);
   const state = entry.readAt ? 'read' : rest ? 'rest' : cmp < 0 ? 'missed' : cmp === 0 ? 'today' : 'upcoming';
   const partial = !entry.readAt && entry.readParts > 0;
-  return html`<li class="day-row is-${state}">
+  return html`<li class="day-row is-${state} ${entry.moved ? 'is-moved' : ''}">
     <a class="day-link" href="${rest ? '#' : readHref(date)}" ${rest ? html`aria-disabled="true"` : ''}>
       ${dayDate(date)}
       <span class="day-ref">
-        ${rest ? '쉬는 날' : formatSegments(entry.segments)}
+        ${rest ? (entry.moved ? '분량을 뒤로 옮김' : '쉬는 날') : formatSegments(entry.segments)}
         ${partial ? html`<small class="partial-note">${entry.readParts}/${entry.parts.length}${partUnit(plan)} 읽음</small>` : ''}
       </span>
       ${rest ? '' : html`<span class="day-min">${readingMinutes(entry.chars)}분</span>`}
@@ -237,11 +239,13 @@ export function bindReadToggles(root, onChange) {
 
 /**
  * 연속으로 읽은 날 수. 오늘(아직 안 읽었으면 어제)부터 거슬러 올라가며
- * 분량이 있는 날을 모두 읽었으면 이어진다. 쉬는 날은 건너뛰고, 계획이 없는 날에서 끊긴다.
+ * 분량이 있는 날을 모두 읽었으면 이어진다. 쉬는 날은 건너뛰고, 계획이 없는 날과
+ * 다시 나누기로 분량을 뒤로 옮긴 날(못 읽은 날)에서 끊긴다.
  */
 export function readingStreak(now) {
   const read = new Set(readDates().map(toISO));
   const due = new Set(scheduledDates().map(toISO));
+  const moved = new Set(movedDates().map(toISO));
   const periods = listPlans().map((p) => [toISO(p.start), toISO(p.end)]);
   const planned = (iso) => periods.some(([s, e]) => s <= iso && iso <= e);
 
@@ -249,7 +253,7 @@ export function readingStreak(now) {
   let date = due.has(toISO(now)) && !read.has(toISO(now)) ? addDays(now, -1) : now;
   for (let i = 0; i < 4000; i++) {
     const k = toISO(date);
-    if (!planned(k)) break;
+    if (!planned(k) || moved.has(k)) break;
     if (due.has(k)) {
       if (!read.has(k)) break;
       streak++;
@@ -360,4 +364,53 @@ export function progressSection(plan, titleSuffix = '') {
     <h2 class="block-title">${title}${titleSuffix}</h2>
     ${progressList(items)}
   </section>`;
+}
+
+// ── 밀린 분량 다시 나누기 ───────────────────────────────────
+
+/**
+ * 오늘(now)부터 계획 끝까지 안 읽은 분량을 다시 나눈 결과. 묶음(병렬·그룹)마다 따로 나눈다.
+ * @returns {{trackChanges, missedDays, targetDays, beforeMinutes, afterMinutes} | null} 다시 나눌 날이 없으면 null
+ */
+export function planRebalance(plan, now) {
+  const from = daysBetween(plan.start, now);
+  const trackChanges = [];
+  const targets = new Set();
+  for (const t of plan.tracks) {
+    const days = plan.days.map((d) => {
+      const p = d.parts.find((x) => x.track === t.track);
+      return p ? { segments: p.segments, chars: p.chars, read: !!p.readAt } : { segments: [], chars: 0, read: false };
+    });
+    const changes = rebalanceTrack(getIndex(), days, from, { splitChapters: plan.splitChapters });
+    if (!changes) continue;
+    trackChanges.push({ track: t.track, changes });
+    for (const c of changes) if (!c.moved) targets.add(c.index);
+  }
+  if (!trackChanges.length) return null;
+
+  const unreadChars = (days) =>
+    days.reduce((s, d) => s + d.parts.filter((p) => !p.readAt).reduce((a, p) => a + p.chars, 0), 0);
+  const past = plan.days.slice(0, from);
+  const remaining = plan.days.slice(from).filter((d) => d.parts.some((p) => !p.readAt));
+  return {
+    trackChanges,
+    missedDays: past.filter((d) => d.parts.some((p) => !p.readAt)).length,
+    targetDays: targets.size,
+    beforeMinutes: remaining.length ? readingMinutes(unreadChars(remaining) / remaining.length) : 0,
+    afterMinutes: readingMinutes(unreadChars(plan.days) / targets.size),
+  };
+}
+
+// ── 구절 탭 ────────────────────────────────────────────────
+
+/** 구절 탭 안의 하위 탭: 저장한 구절 · 묵상 메모 · 검색 */
+export function verseTabs(active) {
+  const tabs = [
+    ['saved', '#/saved', '저장한 구절'],
+    ['notes', '#/notes', '묵상 메모'],
+    ['search', '#/search', '검색'],
+  ];
+  return html`<nav class="subtabs" aria-label="구절 메뉴">
+    ${tabs.map(([id, href, label]) => html`<a href="${href}" ${id === active ? html`aria-current="page"` : ''}>${label}</a>`)}
+  </nav>`;
 }

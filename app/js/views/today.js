@@ -13,8 +13,8 @@ import {
   today,
   ymKey,
 } from '../dates.js';
-import { currentAccount, listAccounts, listPlans, planOn, plansOverlapping } from '../db.js';
-import { html, setHTML, formatNumber } from '../ui.js';
+import { currentAccount, listAccounts, listPlans, planOn, plansOverlapping, rebalancePlan } from '../db.js';
+import { confirmDialog, html, setHTML, formatNumber, toast } from '../ui.js';
 import {
   accountChip,
   accountStatus,
@@ -31,6 +31,7 @@ import {
   newPlanHref,
   partUnit,
   periodLabel,
+  planRebalance,
   progressOf,
   progressSection,
   readHref,
@@ -202,6 +203,10 @@ export async function todayView(root) {
           ? html`<section class="block">
               <h2 class="block-title">밀린 읽기 <span class="badge">${missed.length}</span></h2>
               ${dayList(missed, (d) => dayRow(plan, d, now))}
+              <div class="rebalance">
+                <p>밀린 분량을 오늘부터 ${formatDate(plan.end)}까지 남은 날에 고르게 다시 나눌 수 있습니다.</p>
+                <button class="btn btn-ghost btn-sm" data-action="rebalance">남은 기간에 다시 나누기</button>
+              </div>
             </section>`
           : ''}
         ${upcoming.length
@@ -217,6 +222,38 @@ export async function todayView(root) {
     );
   };
 
+  const rebalance = async () => {
+    const now = today();
+    const plan = planOn(now);
+    const result = plan && planRebalance(plan, now);
+    if (!result) {
+      toast('다시 나눌 남은 날이 없습니다');
+      return;
+    }
+    const ok = await confirmDialog({
+      title: '밀린 분량을 다시 나눌까요?',
+      message:
+        `밀린 ${result.missedDays}일 치를 포함해 아직 안 읽은 분량을 오늘부터 ${formatDate(plan.end)}까지 ` +
+        `${result.targetDays}일에 고르게 나눕니다. 하루 약 ${result.beforeMinutes}분 → ${result.afterMinutes}분. ` +
+        '이미 읽은 날은 그대로 두고, 지난 날짜에는 "분량을 뒤로 옮김"으로 남습니다.',
+      confirmText: '다시 나누기',
+    });
+    if (!ok) return;
+    try {
+      await rebalancePlan(plan.id, result.trackChanges);
+    } catch (err) {
+      toast(`다시 나누지 못했습니다: ${err.message}`);
+      return;
+    }
+    toast('남은 기간에 다시 나눴습니다');
+    render();
+  };
+
   bindReadToggles(root, render);
+  const onToggle = root.onclick;
+  root.onclick = (e) => {
+    if (e.target.closest('[data-action="rebalance"]')) return rebalance();
+    return onToggle(e);
+  };
   render();
 }

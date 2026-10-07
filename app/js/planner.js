@@ -75,7 +75,8 @@ export function verseNumbers(ch) {
  * 읽기 계획을 만든다.
  *
  * @param {{books: Array<{code: string, chapters: Array<{w: number[], h: number[], v?: number[]}>}>}} index
- * @param {Array<{b: string, c: number}>} chapters 선택한 장 (읽을 순서대로)
+ * @param {Array<{b: string, c: number, from?: number, to?: number}>} chapters 선택한 장 (읽을 순서대로).
+ *   from/to가 있으면 그 장의 그 절 범위만 (다시 나누기에서 장의 일부가 남았을 때)
  * @param {number} days 그 달의 날 수
  * @param {{splitChapters?: boolean}} [opts] false면 장 중간에서 끊지 않는다
  * @returns {Array<{segments: Array<{b: string, c: number, from?: number, to?: number}>, chars: number}>}
@@ -87,23 +88,29 @@ export function buildPlan(index, chapters, days, { splitChapters = true } = {}) 
 
   // 나눌 수 있는 최소 단위: 절(기본) 또는 장
   const units = [];
-  let prevRef = null;
-  for (const { b, c } of chapters) {
+  let prevEnd = null; // 앞 항목의 마지막 절 {b, c, v}
+  for (const { b, c, from, to } of chapters) {
     const ch = books.get(b)?.chapters[c - 1];
     if (!ch) throw new Error(`없는 장입니다: ${b} ${c}`);
-    // 바로 앞 장과 이어지지 않으면(책이 바뀌거나 장을 건너뛰면) 책 경계처럼 다룬다.
-    const continues = prevRef && prevRef.b === b && prevRef.c === c - 1;
-    const chapterBreak = continues ? 'chapter' : 'book';
-    prevRef = { b, c };
+    const nums = verseNumbers(ch);
+    const lo = from ?? nums[0];
+    const hi = to ?? nums.at(-1);
+    const sections = new Set(ch.h);
+    // 앞 항목에 바로 이어지면 장 경계(또는 장 안의 단락·절), 아니면(책이 바뀌거나 건너뛰면) 책 경계처럼 다룬다.
+    const continues = prevEnd && followsVerse(books, prevEnd, { b, c, v: lo });
+    const firstBreak = !continues ? 'book' : lo === nums[0] ? 'chapter' : sections.has(lo) ? 'section' : 'verse';
+    prevEnd = { b, c, v: hi };
 
     if (!splitChapters) {
-      units.push({ b, c, w: sum(ch.w), brk: chapterBreak });
+      // 장 단위. 이미 일부만 남은 장은 그 범위를 한 단위로 둔다.
+      const w = sum(nums.map((v, i) => (v >= lo && v <= hi ? ch.w[i] : 0)));
+      const whole = lo === nums[0] && hi === nums.at(-1);
+      units.push(whole ? { b, c, w, brk: firstBreak } : { b, c, from: lo, to: hi, w, brk: firstBreak });
       continue;
     }
-    const nums = verseNumbers(ch);
-    const sections = new Set(ch.h);
     nums.forEach((v, i) => {
-      const brk = i === 0 ? chapterBreak : sections.has(v) ? 'section' : 'verse';
+      if (v < lo || v > hi) return;
+      const brk = v === lo ? firstBreak : sections.has(v) ? 'section' : 'verse';
       units.push({ b, c, v, w: ch.w[i], brk });
     });
   }
@@ -154,14 +161,83 @@ export function buildGroupPlan(index, groups, days, opts) {
   return groups.map((chapters) => buildPlan(index, chapters, days, opts));
 }
 
+/**
+ * 밀린 분량 다시 나누기 (묶음 하나).
+ * 아직 안 읽은 날의 분량을 모두 모아, 오늘(from)부터 끝까지 안 읽은 날에 기존 알고리즘으로 다시 고르게 나눈다.
+ * 읽은 날은 그대로 두고, 오늘 전의 안 읽은 날은 비운다(뒤로 옮겨짐).
+ *
+ * @param {Array<{segments: Array, chars: number, read: boolean}>} days 그 묶음의 날짜별 분량 (계획 첫날부터)
+ * @param {number} from 오늘이 몇 번째 날인지 (0부터)
+ * @param {{splitChapters?: boolean}} [opts]
+ * @returns {Array<{index: number, segments: Array, chars: number, moved: boolean}> | null}
+ *   바뀌는 날만 (moved: 분량을 뒤로 옮겨 비운 지난 날). 다시 나눌 남은 날이 없으면 null
+ */
+export function rebalanceTrack(index, days, from, opts) {
+  const targets = [];
+  days.forEach((d, i) => {
+    if (i >= from && !d.read) targets.push(i);
+  });
+  if (!targets.length) return null;
+
+  const books = new Map(index.books.map((b) => [b.code, b]));
+  const pool = mergeSegments(
+    books,
+    days.filter((d) => !d.read).flatMap((d) => d.segments),
+  );
+  const spread = buildPlan(index, pool, targets.length, opts);
+
+  const changes = [];
+  days.forEach((d, i) => {
+    if (i < from && !d.read && d.segments.length) changes.push({ index: i, segments: [], chars: 0, moved: true });
+  });
+  targets.forEach((i, j) => changes.push({ index: i, ...spread[j], moved: false }));
+  return changes.sort((a, b) => a.index - b.index);
+}
+
+/** y가 x 바로 다음 절인지 (빠진 절은 건너뛴다) */
+function followsVerse(books, x, y) {
+  if (x.b !== y.b) return false;
+  const chapters = books.get(x.b).chapters;
+  const xs = verseNumbers(chapters[x.c - 1]);
+  if (x.c === y.c) return xs.indexOf(y.v) === xs.indexOf(x.v) + 1;
+  return y.c === x.c + 1 && x.v === xs.at(-1) && y.v === verseNumbers(chapters[y.c - 1])[0];
+}
+
+/** 같은 장에서 바로 이어지는 구간들을 하나로 합친다. 장 전체가 되면 from/to를 지운다. */
+function mergeSegments(books, segments) {
+  const out = [];
+  for (const s of segments) {
+    const nums = verseNumbers(books.get(s.b).chapters[s.c - 1]);
+    const lo = s.from ?? nums[0];
+    const hi = s.to ?? nums.at(-1);
+    const last = out.at(-1);
+    if (last && last.b === s.b && last.c === s.c && followsVerse(books, { b: s.b, c: s.c, v: last.to }, { b: s.b, c: s.c, v: lo })) {
+      last.to = hi;
+    } else {
+      out.push({ b: s.b, c: s.c, from: lo, to: hi });
+    }
+  }
+  for (const s of out) {
+    const nums = verseNumbers(books.get(s.b).chapters[s.c - 1]);
+    if (s.from === nums[0] && s.to === nums.at(-1)) {
+      delete s.from;
+      delete s.to;
+    }
+  }
+  return out;
+}
+
 function toSegments(group, books) {
   const segs = [];
   for (const u of group) {
     const last = segs.at(-1);
     if (last && last.b === u.b && last.c === u.c && u.v != null) {
       last.to = u.v;
+    } else if (u.v != null) {
+      segs.push({ b: u.b, c: u.c, from: u.v, to: u.v });
     } else {
-      segs.push(u.v == null ? { b: u.b, c: u.c } : { b: u.b, c: u.c, from: u.v, to: u.v });
+      // 장 단위(장을 나누지 않는 계획). 일부만 남은 장이면 그 범위
+      segs.push(u.from == null ? { b: u.b, c: u.c } : { b: u.b, c: u.c, from: u.from, to: u.to });
     }
   }
   // 한 장을 처음부터 끝까지 다 읽는 구간은 장 전체로 표시한다.

@@ -92,13 +92,15 @@ export async function calendarView(root, [y, m]) {
       const cls = [
         entry.readAt ? 'is-read' : rest ? 'is-rest' : cmp < 0 ? 'is-missed' : '',
         !entry.readAt && entry.readParts ? 'is-partial' : '',
+        rest && entry.moved ? 'is-moved' : '',
         cmp === 0 ? 'is-today' : '',
         dayCls,
       ].join(' ');
-      const label = `${m}월 ${d}일 ${rest ? '쉬는 날' : formatSegments(entry.segments)}${entry.readAt ? ', 읽음' : entry.readParts ? `, ${entry.readParts}/${entry.parts.length}${partUnit(plan)} 읽음` : ''}`;
+      const restLabel = entry.moved ? '분량을 뒤로 옮김' : '쉬는 날';
+      const label = `${m}월 ${d}일 ${rest ? restLabel : formatSegments(entry.segments)}${entry.readAt ? ', 읽음' : entry.readParts ? `, ${entry.readParts}/${entry.parts.length}${partUnit(plan)} 읽음` : ''}`;
       cells.push(
         rest
-          ? html`<span class="cal-cell ${cls}" aria-label="${label}"><b>${d}</b></span>`
+          ? html`<span class="cal-cell ${cls}" aria-label="${label}"><b>${d}</b>${entry.moved ? html`<small>옮김</small>` : ''}</span>`
           : html`<a class="cal-cell ${cls}" href="${readHref(date)}" aria-label="${label}">
               <b>${d}</b><small>${formatSegments(entry.segments, { short: true })}</small>
             </a>`,

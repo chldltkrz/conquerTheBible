@@ -3,8 +3,10 @@
 import { book, chapterUnit, formatSegments, loadBook, readingMinutes } from '../bible.js';
 import { formatDay, formatTimestamp, ymKey } from '../dates.js';
 import {
+  getDayNote,
   getSetting,
   planOn,
+  saveDayNote,
   saveVerses,
   savedInReading,
   setRead,
@@ -53,6 +55,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
   const navLabel = ({ date }) => (date.m === m ? `${date.d}일` : `${date.m}월 ${date.d}일`);
   const title = formatSegments(entry.segments);
   const day = entry.day;
+  const note = getDayNote({ y, m, d });
 
   setHTML(
     root,
@@ -71,6 +74,14 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
         <p class="muted loading">본문을 불러오는 중…</p>
       </article>
       <p class="reader-hint">마음에 남는 절을 눌러 저장해 보세요. 저장한 구절은 <a href="#/saved">구절</a> 탭에 모입니다.</p>
+      <section class="memo-box">
+        <label for="day-memo">
+          <b>오늘의 묵상 메모</b>
+          <small id="memo-status">${note ? `${formatTimestamp(note.updatedAt)} 저장` : ''}</small>
+        </label>
+        <textarea id="day-memo" rows="3" maxlength="2000"
+          placeholder="말씀을 읽으며 받은 은혜, 결단, 기도 제목을 적어 보세요">${note?.text ?? ''}</textarea>
+      </section>
       <footer class="reader-foot" id="reader-foot"></footer>
       <div class="select-bar" id="select-bar" hidden></div>`,
   );
@@ -214,6 +225,33 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     const verse = e.target.closest('.verse[data-ref]');
     if (verse && !window.getSelection()?.toString()) toggleVerse(verse);
   };
+  // ── 묵상 메모: 입력이 멈추면 잠시 뒤, 입력란을 벗어나면 바로 저장한다 ─────
+  const memoStatus = root.querySelector('#memo-status');
+  let memoTimer = null;
+  let savedMemo = note?.text ?? '';
+  const saveMemo = async (text) => {
+    clearTimeout(memoTimer);
+    if (text === savedMemo) return;
+    savedMemo = text;
+    try {
+      const at = await saveDayNote({ y, m, d }, title, text);
+      memoStatus.textContent = at ? `${formatTimestamp(at)} 저장` : '메모를 지웠습니다';
+    } catch (err) {
+      savedMemo = null; // 다음 입력 때 다시 시도
+      memoStatus.textContent = `저장하지 못했습니다: ${err.message}`;
+    }
+  };
+  root.oninput = (e) => {
+    if (e.target.id !== 'day-memo') return;
+    memoStatus.textContent = '입력 중…';
+    clearTimeout(memoTimer);
+    const text = e.target.value;
+    memoTimer = setTimeout(() => saveMemo(text), 800);
+  };
+  root.onchange = (e) => {
+    if (e.target.id === 'day-memo') saveMemo(e.target.value);
+  };
+
   root.onkeydown = (e) => {
     const verse = e.target.closest?.('.verse[data-ref]');
     if (verse && (e.key === 'Enter' || e.key === ' ')) {

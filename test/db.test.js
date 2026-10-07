@@ -15,6 +15,16 @@ import {
   listPlans,
   readDates,
   scheduledDates,
+  rebalancePlan,
+  movedDates,
+  getDayNote,
+  saveDayNote,
+  saveVerseNote,
+  verseNotes,
+  listNotes,
+  saveVerseToday,
+  deleteSavedVerse,
+  listSavedVerses,
 } from '../app/js/db.js';
 
 const initSqlJs = createRequire(import.meta.url)('sql.js');
@@ -281,4 +291,82 @@ test('그룹 계획: 그룹마다 여러 책을 묶음 하나로 저장하고 �
   await setRead(plan.id, 1, true, 0);
   assert.deepEqual(readDates(), [nov(1)]);
   assert.deepEqual(listPlans().map((p) => [p.mode, p.readDays, p.readingDays]), [['group', 1, 2]]);
+});
+
+// ── 다시 나누기·묵상 메모·검색에서 저장 (v5) ─────────────────
+
+test('다시 나누기 결과를 저장하면 옮긴 날은 비고, 연속 읽기용 날짜에 남는다', async () => {
+  useMemoryDatabase(new SQL.Database());
+  await savePlan(parallel);
+  const plan = planOn(nov1);
+  await setRead(plan.id, 1, true); // 1일 모두 읽음
+
+  // 출애굽기 2일째를 3일째로 옮긴다 (2일째는 비우고 moved)
+  await rebalancePlan(plan.id, [
+    {
+      track: 1,
+      changes: [
+        { index: 1, segments: [], chars: 0, moved: true },
+        { index: 2, segments: seg('exo', 2), chars: 50, moved: false },
+      ],
+    },
+  ]);
+  const after = planOn(nov1);
+  assert.deepEqual(
+    after.days.map((d) => [d.parts.map((p) => p.title).join('+'), d.moved]),
+    [
+      ['창세기+출애굽기', false],
+      ['창세기', true],
+      ['창세기+출애굽기', false],
+    ],
+  );
+  assert.equal(after.days[0].readAt != null, true, '읽은 날은 그대로');
+  assert.deepEqual(movedDates(), [{ y: 2026, m: 11, d: 2 }]);
+  assert.equal(after.totalChars, 400, '분량 합계는 그대로');
+});
+
+test('묵상 메모: 날짜별 메모는 계획을 다시 만들어도 남고, 빈 글이면 지운다', async () => {
+  useMemoryDatabase(new SQL.Database());
+  await savePlan(parallel);
+  assert.equal(getDayNote(nov1), null);
+  assert.ok(await saveDayNote(nov1, '창세기 1장, 출애굽기 1장', '빛이 생겨라'));
+  await saveDayNote(nov1, '창세기 1장, 출애굽기 1장', '빛이 생겨라 하시니');
+  assert.equal(getDayNote(nov1).text, '빛이 생겨라 하시니');
+
+  await savePlan({ ...parallel, title: '다시 만든 계획' });
+  assert.equal(getDayNote(nov1).text, '빛이 생겨라 하시니', '계획을 다시 만들어도 남는다');
+
+  await saveDayNote(nov1, '', '   ');
+  assert.equal(getDayNote(nov1), null);
+});
+
+test('구절 메모와 메모 목록, 저장한 구절을 지우면 메모도 지운다', async () => {
+  useMemoryDatabase(new SQL.Database());
+  await saveVerseToday({ b: 'psa', c: 23, v: 1, t: '주님은 나의 목자시니' });
+  await saveVerseNote('psa', 23, 1, '부족함이 없다');
+  await saveDayNote(nov1, '창세기 1장', '첫날 메모');
+  assert.equal(verseNotes().get('psa:23:1').text, '부족함이 없다');
+
+  const notes = listNotes();
+  assert.deepEqual(
+    notes.map((n) => n.kind).sort(),
+    ['day', 'verse'],
+  );
+  const verse = notes.find((n) => n.kind === 'verse');
+  assert.equal(verse.verseText, '주님은 나의 목자시니');
+
+  await deleteSavedVerse('psa', 23, 1);
+  assert.equal(verseNotes().size, 0);
+  assert.deepEqual(
+    listNotes().map((n) => n.kind),
+    ['day'],
+  );
+});
+
+test('검색에서 저장: 같은 날 같은 절은 한 번만 센다', async () => {
+  useMemoryDatabase(new SQL.Database());
+  const x = { b: 'jhn', c: 3, v: 16, t: '하나님이 세상을 이처럼 사랑하셔서' };
+  assert.equal(await saveVerseToday(x), true);
+  assert.equal(await saveVerseToday(x), false);
+  assert.equal(listSavedVerses()[0].times, 1);
 });

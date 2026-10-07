@@ -1,7 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { partition, buildPlan, buildParallelPlan, buildGroupPlan, verseNumbers } from '../app/js/planner.js';
+import {
+  partition,
+  buildPlan,
+  buildParallelPlan,
+  buildGroupPlan,
+  rebalanceTrack,
+  verseNumbers,
+} from '../app/js/planner.js';
 
 // 모든 분할을 시도하는 O(n²k) 기준 구현
 function bruteCost(w, k, pen = []) {
@@ -214,6 +221,68 @@ test('그룹으로 읽기는 그룹마다 여러 책을 이어 붙여 따로 기
     tracks.map((days) => days[0].segments[0].b),
     ['psa', 'mat', 'isa'],
   );
+});
+
+// ── 밀린 분량 다시 나누기 ───────────────────────────────────
+
+/** 계획 days에 rebalanceTrack 결과를 적용한다 */
+function applyChanges(days, changes) {
+  const out = days.map((d) => ({ ...d }));
+  for (const c of changes) out[c.index] = { segments: c.segments, chars: c.chars, read: false, moved: c.moved };
+  return out;
+}
+const sortedVerses = (index, days) => flatten(index, days).sort();
+
+test('다시 나누기: 밀린 날의 분량을 오늘부터 남은 날에 고르게 옮긴다', () => {
+  const index = fakeIndex({ aaa: Array(30).fill(10) });
+  const chapters = chaptersOf(index, 'aaa');
+  // 하루 한 장, 1~3일은 읽음, 4~6일은 밀림, 오늘은 7일째(index 6)
+  const days = buildPlan(index, chapters, 30).map((d, i) => ({ ...d, read: i < 3 }));
+  const changes = rebalanceTrack(index, days, 6);
+
+  assert.deepEqual(
+    changes.filter((c) => c.moved).map((c) => c.index),
+    [3, 4, 5],
+    '밀린 날은 비운다',
+  );
+  const after = applyChanges(days, changes);
+  assert.deepEqual(flatten(index, after), expected(index, chapters), '빠짐도 중복도 없이 순서대로');
+  assert.ok(after.slice(6).every((d) => d.segments.length), '남은 날은 모두 분량이 있다');
+  const chars = after.slice(6).map((d) => d.chars);
+  assert.ok(Math.max(...chars) / Math.min(...chars) < 2.2, `남은 날 분량이 고르지 않음: ${chars}`);
+  // 읽은 날은 바뀌지 않는다
+  assert.ok(changes.every((c) => c.index >= 3));
+});
+
+test('다시 나누기: 미리 읽은 날은 그대로 두고, 장 중간까지 읽은 것도 이어서 나눈다', () => {
+  const index = fakeIndex({ aaa: [20, 20, 20, 20], bbb: [15, 15] });
+  const chapters = [...chaptersOf(index, 'aaa'), ...chaptersOf(index, 'bbb')];
+  // 6장을 12일에: 장 중간에서 나뉜다
+  const days = buildPlan(index, chapters, 12).map((d, i) => ({ ...d, read: i === 0 || i === 9 }));
+  assert.ok(days.some((d) => d.segments.some((s) => s.from != null)), '장 중간에서 나뉜 계획이어야 한다');
+
+  const changes = rebalanceTrack(index, days, 4);
+  const after = applyChanges(days, changes);
+  assert.deepEqual(after[9].segments, days[9].segments, '미리 읽은 날은 그대로');
+  assert.ok(!changes.some((c) => c.index === 0 || c.index === 9));
+  assert.deepEqual(sortedVerses(index, after), sortedVerses(index, days), '절이 빠지거나 겹치지 않는다');
+});
+
+test('다시 나누기: 장을 나누지 않는 계획은 장 단위로 다시 나눈다', () => {
+  const index = fakeIndex({ aaa: Array(10).fill(12) });
+  const days = buildPlan(index, chaptersOf(index, 'aaa'), 10, { splitChapters: false }).map((d, i) => ({
+    ...d,
+    read: i < 2,
+  }));
+  const after = applyChanges(days, rebalanceTrack(index, days, 5, { splitChapters: false }));
+  assert.deepEqual(flatten(index, after), expected(index, chaptersOf(index, 'aaa')));
+  assert.ok(after.every((d) => d.segments.every((s) => s.from == null)), '장 중간에서 끊지 않는다');
+});
+
+test('다시 나누기: 남은 날을 모두 읽었으면 null', () => {
+  const index = fakeIndex({ aaa: Array(5).fill(10) });
+  const days = buildPlan(index, chaptersOf(index, 'aaa'), 5).map((d, i) => ({ ...d, read: i !== 1 }));
+  assert.equal(rebalanceTrack(index, days, 3), null);
 });
 
 test('선택이 비어 있으면 빈 날만 돌려준다', () => {

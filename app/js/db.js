@@ -165,6 +165,32 @@ export const MIGRATIONS = [
   DROP TABLE plan_days;
   ALTER TABLE plan_days_v4 RENAME TO plan_days;
   `,
+  // v5: 밀린 분량 다시 나누기, 묵상 메모
+  `
+  -- 1이면 다시 나누기로 이 날의 분량을 뒤로 옮겨 비운 날 (쉬는 날과 달리 연속 읽기가 끊긴다)
+  ALTER TABLE plan_days ADD COLUMN moved INTEGER NOT NULL DEFAULT 0;
+
+  -- 그날 읽은 분량에 남긴 묵상 메모. 계획을 다시 만들어도 남도록 계획이 아니라 날짜에 단다.
+  CREATE TABLE day_notes (
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    date       TEXT    NOT NULL,               -- 'YYYY-MM-DD'
+    passage    TEXT    NOT NULL,               -- 메모를 쓸 때 그날 읽은 범위 ("창세기 1–3장")
+    text       TEXT    NOT NULL,
+    updated_at TEXT    NOT NULL,
+    PRIMARY KEY (account_id, date)
+  );
+
+  -- 저장한 구절에 남긴 메모 (절마다 하나)
+  CREATE TABLE verse_notes (
+    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    book       TEXT    NOT NULL,
+    chapter    INTEGER NOT NULL,
+    verse      INTEGER NOT NULL,
+    text       TEXT    NOT NULL,
+    updated_at TEXT    NOT NULL,
+    PRIMARY KEY (account_id, book, chapter, verse)
+  );
+  `,
 ];
 
 /** 한 계획의 최대 기간 (1년 1독 계획까지) */
@@ -385,10 +411,11 @@ export function plansOverlapping(start, end, account = accountId) {
 /**
  * 계획 전체.
  *   plan.tracks: [{track, title, totalChars}]  (이어서 읽기는 하나, 병렬 읽기는 책마다 하나)
- *   plan.days[i]: i+1번째 날 전체 — {day, date, parts, segments, chars, readAt, readParts}
+ *   plan.days[i]: i+1번째 날 전체 — {day, date, parts, segments, chars, readAt, readParts, moved}
  *     day: 시작일부터 센 번호(1부터), date: 그날 {y, m, d}
  *     parts: 분량이 있는 묶음별 [{track, title, segments, chars, readAt}]
  *     segments/chars: 모든 묶음을 합친 것, readAt: 모든 묶음을 읽었을 때만 마지막 시각
+ *     moved: 다시 나누기로 분량을 뒤로 옮긴 묶음이 있는 날
  */
 function loadPlan(row) {
   const plan = planFromRow(row);
@@ -398,14 +425,16 @@ function loadPlan(row) {
   const titles = new Map(plan.tracks.map((t) => [t.track, t.title]));
 
   const byDay = new Map();
+  const moved = new Set();
   for (const d of all(
-    `SELECT d.track, d.day, d.segments, d.chars, r.read_at
+    `SELECT d.track, d.day, d.segments, d.chars, d.moved, r.read_at
        FROM plan_days d
        LEFT JOIN readings r ON r.plan_id = d.plan_id AND r.track = d.track AND r.day = d.day
       WHERE d.plan_id = $id ORDER BY d.day, d.track`,
     { $id: plan.id },
   )) {
     if (!byDay.has(d.day)) byDay.set(d.day, []);
+    if (d.moved) moved.add(d.day);
     const segments = JSON.parse(d.segments);
     if (segments.length) {
       byDay.get(d.day).push({ track: d.track, title: titles.get(d.track), segments, chars: d.chars, readAt: d.read_at });
@@ -421,9 +450,27 @@ function loadPlan(row) {
       chars: parts.reduce((s, p) => s + p.chars, 0),
       readParts,
       readAt: parts.length && readParts === parts.length ? parts.map((p) => p.readAt).sort().at(-1) : null,
+      moved: moved.has(day),
     };
   });
   return plan;
+}
+
+/**
+ * 다시 나누기 결과를 저장한다. 분량 합계는 그대로라 계획·묶음의 total_chars는 바꾸지 않는다.
+ * @param {Array<{track, changes: Array<{index, segments, chars, moved}>}>} trackChanges index는 0부터
+ */
+export function rebalancePlan(planId, trackChanges) {
+  return write(() => {
+    const stmt = db.prepare('UPDATE plan_days SET segments = ?, chars = ?, moved = ? WHERE plan_id = ? AND track = ? AND day = ?');
+    try {
+      for (const { track, changes } of trackChanges) {
+        for (const c of changes) stmt.run([JSON.stringify(c.segments), c.chars, c.moved ? 1 : 0, planId, track, c.index + 1]);
+      }
+    } finally {
+      stmt.free();
+    }
+  });
 }
 
 /** 지금 계정의 모든 계획 요약 (최근 계획부터). readDays는 모든 묶음을 다 읽은 날 수 */
@@ -521,6 +568,16 @@ export function scheduledDates() {
   return dayStatusDates('');
 }
 
+/** 지금 계정에서 다시 나누기로 분량을 뒤로 옮긴 날짜들 (연속 읽기를 끊는다) */
+export function movedDates() {
+  return all(
+    `SELECT DISTINCT date(p.start_date, '+' || (d.day - 1) || ' days') AS date
+       FROM plan_days d JOIN plans p ON p.id = d.plan_id
+      WHERE p.account_id = $a AND d.moved = 1`,
+    { $a: accountId },
+  ).map((r) => fromISO(r.date));
+}
+
 function dayStatusDates(filter) {
   return all(
     `WITH ${DAY_STATUS}
@@ -608,16 +665,116 @@ export function listSavedVerses() {
   }));
 }
 
-/** 그 절의 저장 기록을 모두 지운다 */
+/**
+ * 계획과 상관없이(검색 결과 등에서) 오늘 날짜로 한 절을 저장한다. 오늘 이미 저장한 절이면 다시 세지 않는다.
+ * @returns {Promise<boolean>} 새로 저장했으면 true
+ */
+export function saveVerseToday(x) {
+  return write(() => {
+    const now = localTimestamp();
+    db.run(
+      `INSERT INTO saved_verses (account_id, book, chapter, verse, verse_end, text, plan_id, day, saved_at)
+       SELECT $a, $b, $c, $v, $e, $t, NULL, NULL, $now
+        WHERE NOT EXISTS (SELECT 1 FROM saved_verses
+                           WHERE account_id = $a AND book = $b AND chapter = $c AND verse = $v
+                             AND substr(saved_at, 1, 10) = substr($now, 1, 10))`,
+      { $a: accountId, $b: x.b, $c: x.c, $v: x.v, $e: x.e ?? null, $t: x.t, $now: now },
+    );
+    return db.getRowsModified() > 0;
+  });
+}
+
+/** 그 절의 저장 기록과 메모를 모두 지운다 */
 export function deleteSavedVerse(b, c, v) {
-  return write(() =>
-    db.run('DELETE FROM saved_verses WHERE account_id = $a AND book = $b AND chapter = $c AND verse = $v', {
-      $a: accountId,
-      $b: b,
-      $c: c,
-      $v: v,
-    }),
+  const params = { $a: accountId, $b: b, $c: c, $v: v };
+  return write(() => {
+    db.run('DELETE FROM saved_verses WHERE account_id = $a AND book = $b AND chapter = $c AND verse = $v', params);
+    db.run('DELETE FROM verse_notes WHERE account_id = $a AND book = $b AND chapter = $c AND verse = $v', params);
+  });
+}
+
+// ── 묵상 메모 ──────────────────────────────────────────────
+
+/** 그 날짜의 묵상 메모 {text, passage, updatedAt}. 없으면 null */
+export function getDayNote(date) {
+  const r = one('SELECT text, passage, updated_at FROM day_notes WHERE account_id = $a AND date = $d', {
+    $a: accountId,
+    $d: toISO(date),
+  });
+  return r && { text: r.text, passage: r.passage, updatedAt: r.updated_at };
+}
+
+/** 그 날짜의 묵상 메모를 저장한다. 빈 글이면 지운다. 저장한 시각(지웠으면 null)을 돌려준다. */
+export function saveDayNote(date, passage, text) {
+  return write(() => {
+    if (!text.trim()) {
+      db.run('DELETE FROM day_notes WHERE account_id = $a AND date = $d', { $a: accountId, $d: toISO(date) });
+      return null;
+    }
+    const now = localTimestamp();
+    db.run(
+      `INSERT INTO day_notes (account_id, date, passage, text, updated_at) VALUES ($a, $d, $p, $t, $now)
+       ON CONFLICT (account_id, date) DO UPDATE SET passage = excluded.passage, text = excluded.text, updated_at = excluded.updated_at`,
+      { $a: accountId, $d: toISO(date), $p: passage, $t: text, $now: now },
+    );
+    return now;
+  });
+}
+
+/** 구절 메모 Map("b:c:v" → {text, updatedAt}) */
+export function verseNotes() {
+  return new Map(
+    all('SELECT book, chapter, verse, text, updated_at FROM verse_notes WHERE account_id = $a', { $a: accountId }).map(
+      (r) => [verseKey(r.book, r.chapter, r.verse), { text: r.text, updatedAt: r.updated_at }],
+    ),
   );
+}
+
+/** 구절 메모를 저장한다. 빈 글이면 지운다. */
+export function saveVerseNote(b, c, v, text) {
+  const params = { $a: accountId, $b: b, $c: c, $v: v };
+  return write(() => {
+    if (!text.trim()) {
+      db.run('DELETE FROM verse_notes WHERE account_id = $a AND book = $b AND chapter = $c AND verse = $v', params);
+      return null;
+    }
+    const now = localTimestamp();
+    db.run(
+      `INSERT INTO verse_notes (account_id, book, chapter, verse, text, updated_at) VALUES ($a, $b, $c, $v, $t, $now)
+       ON CONFLICT (account_id, book, chapter, verse) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at`,
+      { ...params, $t: text, $now: now },
+    );
+    return now;
+  });
+}
+
+/**
+ * 지금 계정의 모든 메모 (최근에 고친 것부터).
+ *   {kind: 'day', date, passage, text, updatedAt} | {kind: 'verse', b, c, v, e, verseText, text, updatedAt}
+ */
+export function listNotes() {
+  const days = all('SELECT date, passage, text, updated_at FROM day_notes WHERE account_id = $a', { $a: accountId }).map(
+    (r) => ({ kind: 'day', date: fromISO(r.date), passage: r.passage, text: r.text, updatedAt: r.updated_at }),
+  );
+  const verses = all(
+    `SELECT n.book, n.chapter, n.verse, n.text, n.updated_at,
+            (SELECT MAX(s.verse_end) FROM saved_verses s WHERE s.account_id = n.account_id
+                AND s.book = n.book AND s.chapter = n.chapter AND s.verse = n.verse) AS verse_end,
+            (SELECT MAX(s.text) FROM saved_verses s WHERE s.account_id = n.account_id
+                AND s.book = n.book AND s.chapter = n.chapter AND s.verse = n.verse) AS verse_text
+       FROM verse_notes n WHERE n.account_id = $a`,
+    { $a: accountId },
+  ).map((r) => ({
+    kind: 'verse',
+    b: r.book,
+    c: r.chapter,
+    v: r.verse,
+    e: r.verse_end,
+    verseText: r.verse_text,
+    text: r.text,
+    updatedAt: r.updated_at,
+  }));
+  return [...days, ...verses].sort((x, y) => y.updatedAt.localeCompare(x.updatedAt));
 }
 
 // ── 설정 ───────────────────────────────────────────────────
