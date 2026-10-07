@@ -20,15 +20,15 @@ import { html, setHTML } from '../ui.js';
 import {
   accountPrefix,
   bindReadToggles,
-  bookProgress,
-  bookProgressList,
   dayList,
   dayRow,
   isMonthPlan,
   modeLabel,
   newPlanHref,
+  partUnit,
   periodLabel,
   progressOf,
+  progressSection,
   readHref,
 } from './common.js';
 
@@ -71,14 +71,16 @@ export async function calendarView(root, [y, m]) {
 
     // 이 달에 걸친 날만. 한 계정의 계획은 기간이 겹치지 않으므로 날짜마다 계획은 하나다.
     const inMonth = (entry) => entry.date.y === y && entry.date.m === m;
-    const byDate = new Map(plans.flatMap((p) => p.days.filter(inMonth).map((entry) => [toISO(entry.date), entry])));
+    const byDate = new Map(
+      plans.flatMap((plan) => plan.days.filter(inMonth).map((entry) => [toISO(entry.date), { plan, entry }])),
+    );
     const several = plans.length > 1;
 
     const cells = [];
     for (let i = 0; i < weekday(y, m, 1); i++) cells.push(html`<span class="cal-cell is-blank" aria-hidden="true"></span>`);
     for (let d = 1; d <= daysInMonth(y, m); d++) {
       const date = { y, m, d };
-      const entry = byDate.get(toISO(date));
+      const { plan, entry } = byDate.get(toISO(date)) ?? {};
       const cmp = compareDate(date, now);
       const dayCls = ['sun', '', '', '', '', '', 'sat'][weekday(y, m, d)];
       if (!entry) {
@@ -93,7 +95,7 @@ export async function calendarView(root, [y, m]) {
         cmp === 0 ? 'is-today' : '',
         dayCls,
       ].join(' ');
-      const label = `${m}월 ${d}일 ${rest ? '쉬는 날' : formatSegments(entry.segments)}${entry.readAt ? ', 읽음' : entry.readParts ? `, ${entry.readParts}/${entry.parts.length}권 읽음` : ''}`;
+      const label = `${m}월 ${d}일 ${rest ? '쉬는 날' : formatSegments(entry.segments)}${entry.readAt ? ', 읽음' : entry.readParts ? `, ${entry.readParts}/${entry.parts.length}${partUnit(plan)} 읽음` : ''}`;
       cells.push(
         rest
           ? html`<span class="cal-cell ${cls}" aria-label="${label}"><b>${d}</b></span>`
@@ -111,12 +113,7 @@ export async function calendarView(root, [y, m]) {
         <span>${isMonthPlan(plan) ? '' : `${periodLabel(plan)} · `}${progress.done}/${progress.total}일 읽음 · ${progress.percent}%</span>
       </div>`;
     };
-    const planDetails = (plan) => html`${bookProgress(plan).length > 1
-        ? html`<section class="block">
-            <h2 class="block-title">책별 진도${several ? ` · ${plan.title}` : ''}</h2>
-            ${bookProgressList(plan)}
-          </section>`
-        : ''}
+    const planDetails = (plan) => html`${progressSection(plan, several ? ` · ${plan.title}` : '')}
       <section class="block">
         <h2 class="block-title">날짜별 분량${several ? ` · ${plan.title}` : ''}</h2>
         ${dayList(plan.days.filter(inMonth), (entry) => dayRow(plan, entry, now))}

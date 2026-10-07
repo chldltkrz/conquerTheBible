@@ -15,7 +15,7 @@ import {
 } from '../db.js';
 import { FONT_SIZE, applyReadingSettings } from '../prefs.js';
 import { html, setHTML, toast } from '../ui.js';
-import { accountPrefix, bookmarkIcon, checkIcon, entryOn, isParallel, readHref } from './common.js';
+import { accountPrefix, bookmarkIcon, checkIcon, entryOn, isParallel, partUnit, readHref } from './common.js';
 
 // 시가서는 한 절씩 줄을 나누어 보여 준다.
 const POETRY = new Set(['job', 'psa', 'pro', 'sng', 'lam']);
@@ -68,6 +68,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
   // ── 읽음 완료 ────────────────────────────────────────────
   // 병렬 읽기면 책(묶음)마다 따로 표시하고, 아래 버튼은 남은 책을 한꺼번에 표시한다.
   const parallel = isParallel(plan);
+  const unit = partUnit(plan); // 권 | 그룹
   const parts = entry.parts.map((p) => ({ ...p }));
   const dayReadAt = () => (parts.every((p) => p.readAt) ? parts.map((p) => p.readAt).sort().at(-1) : null);
 
@@ -93,12 +94,12 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
       html`${readAt
           ? html`<div class="done-box">
               <span class="done-mark">${checkIcon}</span>
-              <span><b>${parallel ? `${parts.length}권 모두 읽음` : '읽음'}</b><small>${formatTimestamp(readAt)}에 기록</small></span>
+              <span><b>${parallel ? `${parts.length}${unit} 모두 읽음` : '읽음'}</b><small>${formatTimestamp(readAt)}에 기록</small></span>
               <button class="btn btn-ghost btn-sm" data-action="toggle" data-read="1">취소</button>
             </div>`
           : html`<button class="btn btn-primary btn-block btn-lg" data-action="toggle" data-read="0">
               ${checkIcon}<span>${parallel && left.length < parts.length
-                ? `남은 ${left.length}권도 읽음 완료`
+                ? `남은 ${left.length}${unit}도 읽음 완료`
                 : `${parallel ? '모두 ' : ''}읽음 완료 · 약 ${readingMinutes(entry.chars)}분 분량`}</span>
             </button>`}
         <nav class="day-nav">
@@ -223,8 +224,12 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
       }
       renderFoot();
       const all = dayReadAt();
-      if (track != null && read && !all) toast(`${targets[0].title} 읽음. 남은 책 ${parts.filter((p) => !p.readAt).length}권`);
-      else toast(read ? `${m}월 ${d}일 분량을 다 읽었습니다. 수고하셨어요!` : '읽음 표시를 지웠습니다');
+      if (track != null && read && !all) {
+        const left = parts.filter((p) => !p.readAt).length;
+        toast(`${targets[0].title} 읽음. ${unit === '권' ? `남은 책 ${left}권` : `남은 그룹 ${left}개`}`);
+      } else {
+        toast(read ? `${m}월 ${d}일 분량을 다 읽었습니다. 수고하셨어요!` : '읽음 표시를 지웠습니다');
+      }
     } catch (err) {
       btn.disabled = false;
       toast(`저장하지 못했습니다: ${err.message}`);

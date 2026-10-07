@@ -255,3 +255,30 @@ test('기간이 맞지 않는 계획은 저장하지 않는다', async () => {
   assert.throws(() => savePlan(simple('너무 김', oct(1), end, MAX_PLAN_DAYS + 1)), /기간은/);
   assert.deepEqual(listPlans(), []);
 });
+
+test('그룹 계획: 그룹마다 여러 책을 묶음 하나로 저장하고 그룹마다 따로 읽음 표시한다', async () => {
+  useMemoryDatabase(new SQL.Database());
+  await savePlan({
+    start: nov(1),
+    end: nov(2),
+    title: '시편 · 복음서',
+    selection: { psa: [1, 2], mat: [1], mrk: [1] },
+    splitChapters: true,
+    mode: 'group',
+    tracks: [
+      { title: '시편 1–2편', days: [{ segments: seg('psa', 1), chars: 10 }, { segments: seg('psa', 2), chars: 10 }] },
+      { title: '마태복음서 · 마가복음서', days: [{ segments: seg('mat', 1), chars: 30 }, { segments: seg('mrk', 1), chars: 30 }] },
+    ],
+  });
+  let plan = planOn(nov(1));
+  assert.equal(plan.mode, 'group');
+  assert.deepEqual(plan.tracks.map((t) => t.title), ['시편 1–2편', '마태복음서 · 마가복음서']);
+  assert.deepEqual(plan.days[1].parts.map((p) => p.segments[0].b), ['psa', 'mrk']);
+
+  await setRead(plan.id, 1, true, 1);
+  plan = planOn(nov(1));
+  assert.deepEqual([plan.days[0].readParts, plan.days[0].readAt], [1, null], '한 그룹만 읽으면 아직 그날 완료가 아니다');
+  await setRead(plan.id, 1, true, 0);
+  assert.deepEqual(readDates(), [nov(1)]);
+  assert.deepEqual(listPlans().map((p) => [p.mode, p.readDays, p.readingDays]), [['group', 1, 2]]);
+});

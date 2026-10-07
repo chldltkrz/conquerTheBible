@@ -78,13 +78,18 @@ export function accountStatus(accountId, now = today()) {
   if (!entry.segments.length) return { text: `${plan.title} · 오늘은 쉬는 날`, state: 'rest' };
   if (entry.readAt) return { text: `${plan.title} · 오늘 읽음`, state: 'read' };
   if (entry.readParts) {
-    return { text: `${plan.title} · 오늘 ${entry.readParts}/${entry.parts.length}권 읽음`, state: 'todo' };
+    return { text: `${plan.title} · 오늘 ${entry.readParts}/${entry.parts.length}${partUnit(plan)} 읽음`, state: 'todo' };
   }
   return { text: `${plan.title} · 오늘 ${formatSegments(entry.segments, { short: true })}`, state: 'todo' };
 }
 
-export const isParallel = (plan) => plan.mode === 'parallel';
-export const modeLabel = (plan) => (isParallel(plan) ? `${plan.tracks.length}권 병렬` : '');
+// 읽는 방식: 'sequential' 이어서 읽기(묶음 하나) | 'parallel' 책마다 묶음 | 'group' 사용자가 묶은 그룹마다 묶음
+/** 묶음이 여럿이라 날마다 묶음마다 따로 읽음 표시하는 계획인지 */
+export const isParallel = (plan) => plan.mode !== 'sequential';
+/** 묶음을 세는 단위: 병렬 읽기는 책(권), 그룹으로 읽기는 그룹 */
+export const partUnit = (plan) => (plan.mode === 'group' ? '그룹' : '권');
+export const modeLabel = (plan) =>
+  plan.mode === 'parallel' ? `${plan.tracks.length}권 병렬` : plan.mode === 'group' ? `${plan.tracks.length}그룹` : '';
 
 /** 계정을 바꾼 뒤 지금 화면을 다시 그리도록 알린다. */
 export async function changeAccount(id) {
@@ -183,7 +188,7 @@ export function dayRow(plan, entry, now) {
       ${dayDate(date)}
       <span class="day-ref">
         ${rest ? '쉬는 날' : formatSegments(entry.segments)}
-        ${partial ? html`<small class="partial-note">${entry.readParts}/${entry.parts.length}권 읽음</small>` : ''}
+        ${partial ? html`<small class="partial-note">${entry.readParts}/${entry.parts.length}${partUnit(plan)} 읽음</small>` : ''}
       </span>
       ${rest ? '' : html`<span class="day-min">${readingMinutes(entry.chars)}분</span>`}
     </a>
@@ -262,42 +267,90 @@ export function progressOf(plan) {
 }
 
 /**
- * 책별 진도: 그 장이 들어 있는 날(여러 날로 나뉘었으면 모두)을 읽었으면 다 읽은 장으로 센다.
- * @returns {Array<{b, done, total}>} 성경 순서
+ * 장마다 다 읽었는지: 그 장이 들어 있는 날(여러 날로 나뉘었으면 모두)을 읽었으면 다 읽은 장으로 센다.
+ * @returns {Array<{b, track, done}>}
  */
-export function bookProgress(plan) {
-  const chapters = new Map(); // "b:c" → {b, done}
+function chapterStatus(plan) {
+  const chapters = new Map(); // "b:c" → {b, track, done}
   for (const d of plan.days) {
     for (const p of d.parts) {
       for (const s of p.segments) {
         const key = `${s.b}:${s.c}`;
-        const cur = chapters.get(key) ?? { b: s.b, done: true };
+        const cur = chapters.get(key) ?? { b: s.b, track: p.track, done: true };
         cur.done &&= !!p.readAt;
         chapters.set(key, cur);
       }
     }
   }
-  const books = new Map();
-  for (const { b, done } of chapters.values()) {
-    const cur = books.get(b) ?? { b, done: 0, total: 0 };
-    cur.total++;
-    if (done) cur.done++;
-    books.set(b, cur);
-  }
-  return [...books.values()].sort((x, y) => book(x.b).order - book(y.b).order);
+  return [...chapters.values()];
 }
 
-/** 책별 진도 막대 목록 */
-export function bookProgressList(plan) {
+/** 장들을 key마다 세어 {done, total}을 붙인다 */
+function tally(chapters, keyOf, init) {
+  const groups = new Map();
+  for (const ch of chapters) {
+    const key = keyOf(ch);
+    const cur = groups.get(key) ?? { ...init(ch), done: 0, total: 0, books: new Set() };
+    cur.total++;
+    if (ch.done) cur.done++;
+    cur.books.add(ch.b);
+    groups.set(key, cur);
+  }
+  return [...groups.values()];
+}
+
+/** 책별 진도 @returns {Array<{b, done, total}>} 성경 순서 */
+export function bookProgress(plan) {
+  return tally(chapterStatus(plan), (ch) => ch.b, (ch) => ({ b: ch.b }))
+    .map(({ b, done, total }) => ({ b, done, total }))
+    .sort((x, y) => book(x.b).order - book(y.b).order);
+}
+
+/** 묶음(그룹)별 진도. 한 책만 든 묶음은 그 책의 단위(편/장)로 센다. @returns {Array<{title, done, total, unit}>} */
+export function trackProgress(plan) {
+  const titles = new Map(plan.tracks.map((t) => [t.track, t.title]));
+  return tally(chapterStatus(plan), (ch) => ch.track, (ch) => ({ track: ch.track }))
+    .sort((x, y) => x.track - y.track)
+    .map(({ track, done, total, books }) => ({
+      title: titles.get(track),
+      done,
+      total,
+      unit: books.size === 1 ? chapterUnit([...books][0]) : '장',
+    }));
+}
+
+/** 진도 막대 목록 @param {Array<{name, done, total, unit}>} items */
+function progressList(items) {
   return html`<ul class="book-progress">
-    ${bookProgress(plan).map((p) => {
+    ${items.map((p) => {
       const pct = Math.round((p.done / p.total) * 100);
       return html`<li class="${p.done === p.total ? 'is-done' : ''}">
-        <span class="bp-name">${book(p.b).name}</span>
+        <span class="bp-name">${p.name}</span>
         <span class="bp-bar" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"
-          aria-label="${book(p.b).name} ${p.done}/${p.total}${chapterUnit(p.b)}"><span style="width:${pct}%"></span></span>
-        <span class="bp-count">${p.done}/${p.total}${chapterUnit(p.b)}</span>
+          aria-label="${p.name} ${p.done}/${p.total}${p.unit}"><span style="width:${pct}%"></span></span>
+        <span class="bp-count">${p.done}/${p.total}${p.unit}</span>
       </li>`;
     })}
   </ul>`;
+}
+
+/**
+ * 진도 구역: 그룹으로 읽기는 그룹별, 그 밖에는 책이 둘 이상일 때 책별 진도. 보여 줄 것이 없으면 빈 문자열.
+ * titleSuffix는 한 화면에 계획이 여럿일 때 제목 뒤에 붙인다.
+ */
+export function progressSection(plan, titleSuffix = '') {
+  let title;
+  let items;
+  if (plan.mode === 'group') {
+    title = '그룹별 진도';
+    items = trackProgress(plan).map((p) => ({ ...p, name: p.title }));
+  } else {
+    title = '책별 진도';
+    items = bookProgress(plan).map((p) => ({ ...p, name: book(p.b).name, unit: chapterUnit(p.b) }));
+    if (items.length < 2) return '';
+  }
+  return html`<section class="block">
+    <h2 class="block-title">${title}${titleSuffix}</h2>
+    ${progressList(items)}
+  </section>`;
 }

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { partition, buildPlan, buildParallelPlan, verseNumbers } from '../app/js/planner.js';
+import { partition, buildPlan, buildParallelPlan, buildGroupPlan, verseNumbers } from '../app/js/planner.js';
 
 // 모든 분할을 시도하는 O(n²k) 기준 구현
 function bruteCost(w, k, pen = []) {
@@ -178,6 +178,41 @@ test('병렬 읽기는 책마다 따로 한 달 전체에 나눈다', () => {
   assert.deepEqual(
     tracks.map((t) => t.days[0].segments[0].c),
     [1, 1, 1],
+  );
+});
+
+test('그룹으로 읽기는 그룹마다 여러 책을 이어 붙여 따로 기간 전체에 나눈다', () => {
+  const index = fakeIndex({
+    psa: Array.from({ length: 150 }, (_, i) => 6 + (i % 12)),
+    isa: Array.from({ length: 66 }, (_, i) => 15 + (i % 10)),
+    jer: Array.from({ length: 52 }, (_, i) => 20 + (i % 9)),
+    mat: Array.from({ length: 28 }, (_, i) => 25 + (i % 10)),
+    mrk: Array.from({ length: 16 }, (_, i) => 30 + (i % 10)),
+  });
+  const groups = [
+    chaptersOf(index, 'psa'),
+    [...chaptersOf(index, 'mat'), ...chaptersOf(index, 'mrk')],
+    [...chaptersOf(index, 'isa'), ...chaptersOf(index, 'jer')],
+  ];
+  const tracks = buildGroupPlan(index, groups, 40);
+
+  assert.equal(tracks.length, 3);
+  tracks.forEach((days, g) => {
+    assert.equal(days.length, 40);
+    assert.deepEqual(flatten(index, days), expected(index, groups[g]), `그룹 ${g + 1}: 빠짐없이 순서대로`);
+    const own = new Set(groups[g].map((x) => x.b));
+    assert.ok(days.every((d) => d.segments.length && d.segments.every((s) => own.has(s.b))), `그룹 ${g + 1}: 날마다 자기 책만`);
+    const chars = days.map((d) => d.chars);
+    const avg = chars.reduce((a, b) => a + b) / chars.length;
+    for (const c of chars) assert.ok(Math.abs(c - avg) / avg < 0.35, `그룹 ${g + 1}: 평균 ${avg}에서 너무 벗어남: ${c}`);
+  });
+  // 그룹 안에서는 이어 읽는다: 마태복음을 다 읽은 뒤 마가복음으로
+  const gospels = tracks[1].flatMap((d) => d.segments.map((s) => s.b));
+  assert.equal(gospels.lastIndexOf('mat') < gospels.indexOf('mrk'), true);
+  // 날마다 세 그룹을 모두 조금씩 읽는다
+  assert.deepEqual(
+    tracks.map((days) => days[0].segments[0].b),
+    ['psa', 'mat', 'isa'],
   );
 });
 

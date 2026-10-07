@@ -31,7 +31,7 @@ import {
   ymKey,
 } from '../dates.js';
 import { MAX_PLAN_DAYS, plansOverlapping, savePlan } from '../db.js';
-import { buildParallelPlan, buildPlan } from '../planner.js';
+import { buildGroupPlan, buildParallelPlan, buildPlan } from '../planner.js';
 import { confirmDialog, formatNumber, html, setHTML, toast } from '../ui.js';
 import { accountPrefix, dayDate, dayList, newPlanHref, periodLabel } from './common.js';
 
@@ -58,10 +58,13 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     m: routeStart?.m ?? m ?? now.m,
     start: routeStart, // 기간을 직접 정할 때의 시작일과 마지막 날
     end: customRoute ? clampEnd(routeStart, addDays({ y: y2, m: m2, d: d2 }, 0)) : null,
-    sel: new Map(), // code → Set(장)
+    sel: new Map(), // 지금 고르는 범위: code → Set(장). 그룹으로 읽기에서는 지금 고르는 그룹(groups[active])
     split: true,
     open: null, // 장 목록을 펼친 책
-    mode: 'sequential', // 'sequential' 이어서 읽기 | 'parallel' 책마다 따로(병렬) 읽기
+    // 'sequential' 이어서 읽기 | 'parallel' 책마다 따로(병렬) 읽기 | 'group' 그룹마다 따로 읽기
+    mode: 'sequential',
+    groups: null, // 그룹으로 읽기: 그룹마다 고른 장 [Map(code → Set(장))]. 한 장은 한 그룹에만 든다.
+    active: 0, // 지금 고르는 그룹
     step: 'select',
     tracks: null, // 미리보기: [{title, days}]
     title: '',
@@ -84,16 +87,19 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
   };
   const loadExisting = () => {
     const existing = samePeriodPlan();
-    state.sel = new Map(
-      Object.entries(existing?.selection ?? {}).map(([code, chs]) => [code, new Set(chs)]),
-    );
     if (existing) {
       state.split = existing.splitChapters;
       state.mode = existing.mode;
     }
+    if (existing?.mode === 'group') {
+      state.groups = groupsOfPlan(existing);
+      selectGroup(0);
+    } else {
+      state.sel = new Map(Object.entries(existing?.selection ?? {}).map(([code, chs]) => [code, new Set(chs)]));
+      state.groups = null;
+    }
     return existing;
   };
-  loadExisting();
 
   // 기간이 바뀐 뒤: 새 기간에 계획이 있으면 그 범위를, 없으면 지금까지 고른 범위를 그대로 쓴다.
   const periodChanged = () => {
@@ -102,18 +108,62 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     history.replaceState(null, '', newPlanHref(start, end));
   };
 
-  const selectionObject = () =>
-    Object.fromEntries(
-      allBooks()
-        .filter((b) => state.sel.get(b.code)?.size)
-        .map((b) => [b.code, [...state.sel.get(b.code)].sort((a, c) => a - c)]),
-    );
+  const isGroup = () => state.mode === 'group';
+  /** 계획 전체에서 고른 장 {code: [장...]} (그룹으로 읽기면 모든 그룹을 합친 것) */
+  const planSelection = () => selectionOf(isGroup() ? unionOf(state.groups) : state.sel);
+  /** 내용이 있는 그룹들 {code: [장...]} */
+  const filledGroups = () => state.groups.map(selectionOf).filter((g) => Object.keys(g).length);
   const count = (code) => state.sel.get(code)?.size ?? 0;
   const isFull = (b) => count(b.code) === b.chapters.length;
-  const setBook = (b, on) => {
-    if (on) state.sel.set(b.code, new Set(b.chapters.map((_, i) => i + 1)));
-    else state.sel.delete(b.code);
+
+  function selectGroup(i) {
+    state.active = i;
+    state.sel = state.groups[i];
+  }
+
+  /**
+   * 지금 고르는 범위에 장을 넣는다. 그룹으로 읽기에서는 다른 그룹에 있던 장을 이 그룹으로 옮기고,
+   * 옮긴 장 수를 돌려준다.
+   */
+  const addChapters = (code, chs) => {
+    const set = state.sel.get(code) ?? new Set();
+    chs.forEach((c) => set.add(c));
+    state.sel.set(code, set);
+    if (!isGroup()) return 0;
+    let moved = 0;
+    for (const g of state.groups) {
+      const other = g === state.sel ? null : g.get(code);
+      if (!other) continue;
+      for (const c of chs) if (other.delete(c)) moved++;
+      if (!other.size) g.delete(code);
+    }
+    return moved;
   };
+  const movedNotice = (moved) => {
+    if (moved) toast(`다른 그룹에 있던 ${moved}장을 ${state.active + 1}번 그룹으로 옮겼습니다`);
+  };
+  const setBook = (b, on) => {
+    if (on) return addChapters(b.code, b.chapters.map((_, i) => i + 1));
+    state.sel.delete(b.code);
+    return 0;
+  };
+
+  /** 읽는 방식 바꾸기. 그룹으로 바꾸면 지금 고른 범위가 첫 그룹이 된다. */
+  const setMode = (mode) => {
+    if (mode === state.mode) return;
+    if (mode === 'group') {
+      // 그룹을 나눠 두고 다른 방식을 잠깐 골랐다가, 범위를 바꾸지 않고 돌아왔으면 그 그룹들을 되살린다.
+      const restore = state.groups && selKey(unionOf(state.groups)) === selKey(state.sel);
+      if (!restore) state.groups = [state.sel];
+      state.mode = mode;
+      selectGroup(0);
+      return;
+    }
+    if (isGroup()) state.sel = unionOf(state.groups);
+    state.mode = mode;
+  };
+
+  loadExisting();
 
   // ── 1단계: 기간과 범위 고르기 ─────────────────────────────
   // 날짜 입력칸은 입력하는 동안 다시 그리면 커서를 잃으므로, 기간이 바뀌면 입력칸 밖의 부분만 다시 그린다.
@@ -193,6 +243,14 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     </section>`;
   };
 
+  /** 그룹으로 읽기에서 그 장(c를 주지 않으면 그 책의 어느 장이든)이 든 다른 그룹 번호들 (1부터) */
+  const otherGroups = (code, c) =>
+    isGroup()
+      ? state.groups
+          .map((g, i) => (g !== state.sel && (c == null ? g.get(code)?.size : g.get(code)?.has(c)) ? i + 1 : null))
+          .filter(Boolean)
+      : [];
+
   const bookRow = (b) => {
     const n = count(b.code);
     const total = b.chapters.length;
@@ -204,6 +262,7 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
           aria-label="${b.name} 전체 ${n === total ? '해제' : '선택'}" aria-pressed="${n === total}"></button>
         <button class="book-name" data-open="${b.code}" aria-expanded="${open}">
           <span>${b.name}</span>
+          ${otherGroups(b.code).map((g) => html`<span class="group-tag" title="그룹 ${g}에 든 장이 있습니다">그룹 ${g}</span>`)}
           <small>${n ? `${n}/${total}${unit}` : `${total}${unit}`}</small>
           <span class="chev" aria-hidden="true">▾</span>
         </button>
@@ -211,10 +270,12 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
       ${open
         ? html`<div class="chapter-panel">
             <div class="chapter-grid">
-              ${b.chapters.map(
-                (_, i) => html`<button class="ch ${state.sel.get(b.code)?.has(i + 1) ? 'on' : ''}"
-                  data-ch="${b.code}:${i + 1}" aria-pressed="${!!state.sel.get(b.code)?.has(i + 1)}">${i + 1}</button>`,
-              )}
+              ${b.chapters.map((_, i) => {
+                const on = !!state.sel.get(b.code)?.has(i + 1);
+                const other = on ? null : otherGroups(b.code, i + 1)[0];
+                return html`<button class="ch ${on ? 'on' : other ? 'in-other' : ''}" data-ch="${b.code}:${i + 1}"
+                  aria-pressed="${on}" ${other ? html`title="그룹 ${other}에 있음"` : ''}>${i + 1}</button>`;
+              })}
             </div>
             <form class="range-row" data-range="${b.code}">
               <input type="number" name="from" min="1" max="${total}" value="1" inputmode="numeric" aria-label="시작 ${unit}" />
@@ -228,11 +289,46 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     </li>`;
   };
 
-  /** 빠른 선택, 읽는 방식, 책 목록, 장 나누기 옵션 */
+  /** 그룹으로 읽기: 그룹 목록과 지금 고르는 그룹 */
+  const groupBlock = () => {
+    const days = periodDays();
+    return html`<section class="block">
+      <h2 class="block-title">그룹
+        <button class="link" data-action="add-group">+ 그룹 추가</button>
+      </h2>
+      <ul class="group-list">
+        ${state.groups.map((g, i) => {
+          const sel = selectionOf(g);
+          const chapters = selectionToChapters(sel);
+          const chars = chapters.reduce((s, x) => s + chapterChars(x.b, x.c), 0);
+          const active = i === state.active;
+          return html`<li class="${active ? 'is-active' : ''}">
+            <button class="group-item" data-group="${i}" aria-pressed="${active}">
+              <span class="group-num">${i + 1}</span>
+              <span class="group-text">
+                <b>${chapters.length ? describeSelection(sel) : '비어 있음'}</b>
+                <small>${chapters.length
+                  ? `${chapters.length}${unitOf(chapters)} · 하루 약 ${readingMinutes(chars / days)}분`
+                  : active ? '아래에서 이 그룹에 넣을 책을 고르세요' : '눌러서 책을 담으세요'}</small>
+              </span>
+              ${active ? html`<span class="tag">고르는 중</span>` : ''}
+            </button>
+            ${state.groups.length > 1
+              ? html`<button class="icon-btn danger" data-remove-group="${i}" aria-label="그룹 ${i + 1} 지우기">✕</button>`
+              : ''}
+          </li>`;
+        })}
+      </ul>
+      <p class="mode-help">아래에서 고르는 책은 <b>그룹 ${state.active + 1}</b>에 들어갑니다. 다른 그룹에 있는 장을 고르면 이 그룹으로 옮겨집니다.</p>
+    </section>`;
+  };
+
+  /** 읽는 방식, (그룹), 빠른 선택, 책 목록, 장 나누기 옵션 */
   const bodyPart = () => {
-    const chapters = selectionToChapters(selectionObject());
+    const chapters = selectionToChapters(planSelection());
     const books = allBooks();
     const bookCount = new Set(chapters.map((x) => x.b)).size;
+    const groupCount = isGroup() ? filledGroups().length : 0;
     const testament = (t, label) => {
       const list = books.filter((b) => b.testament === t);
       const allOn = list.every(isFull);
@@ -243,27 +339,33 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
         <ul class="book-list">${list.map(bookRow)}</ul>
       </section>`;
     };
+    const help = {
+      sequential: '고른 책을 성경 순서대로 이어 붙여 기간 전체에 나눕니다.',
+      parallel: '고른 책마다 따로 기간 전체에 나눕니다. 날마다 책마다 조금씩 함께 읽고, 진도도 책마다 따로 봅니다.',
+      group: '책을 여러 그룹으로 묶고, 그룹마다 따로 기간 전체에 나눕니다. 그룹 안에서는 성경 순서대로 이어 읽고, 날마다 그룹마다 조금씩 함께 읽습니다.',
+    };
     return html`<section class="block">
-        <h2 class="block-title">빠른 선택</h2>
+        <h2 class="block-title">읽는 방식</h2>
+        <div class="segmented mode-tabs" role="radiogroup" aria-label="읽는 방식">
+          <button role="radio" data-mode="sequential" aria-checked="${state.mode === 'sequential'}">이어서 읽기</button>
+          <button role="radio" data-mode="parallel" aria-checked="${state.mode === 'parallel'}">병렬로 읽기</button>
+          <button role="radio" data-mode="group" aria-checked="${state.mode === 'group'}">그룹으로 읽기</button>
+        </div>
+        <p class="mode-help">${help[state.mode]}</p>
+        ${state.mode === 'parallel' && bookCount > 6
+          ? html`<p class="notice">${bookCount}권을 병렬로 읽으면 날마다 ${bookCount}군데를 읽게 됩니다.</p>`
+          : ''}
+        ${groupCount > 6 ? html`<p class="notice">${groupCount}그룹이면 날마다 ${groupCount}군데를 읽게 됩니다.</p>` : ''}
+      </section>
+      ${isGroup() ? groupBlock() : ''}
+      <section class="block">
+        <h2 class="block-title">빠른 선택${isGroup() ? ` · 그룹 ${state.active + 1}` : ''}</h2>
         <div class="chips">
           ${PRESETS.map(
             (p, i) => html`<button class="chip ${presetBooks(p).every(isFull) ? 'on' : ''}" data-preset="${i}"
               aria-pressed="${presetBooks(p).every(isFull)}">${p.name}</button>`,
           )}
         </div>
-      </section>
-      <section class="block">
-        <h2 class="block-title">읽는 방식</h2>
-        <div class="segmented mode-tabs" role="radiogroup" aria-label="읽는 방식">
-          <button role="radio" data-mode="sequential" aria-checked="${state.mode === 'sequential'}">이어서 읽기</button>
-          <button role="radio" data-mode="parallel" aria-checked="${state.mode === 'parallel'}">병렬로 읽기</button>
-        </div>
-        <p class="mode-help">${state.mode === 'parallel'
-          ? '고른 책마다 따로 기간 전체에 나눕니다. 날마다 책마다 조금씩 함께 읽고, 진도도 책마다 따로 봅니다.'
-          : '고른 책을 성경 순서대로 이어 붙여 기간 전체에 나눕니다.'}</p>
-        ${state.mode === 'parallel' && bookCount > 6
-          ? html`<p class="notice">${bookCount}권을 병렬로 읽으면 날마다 ${bookCount}군데를 읽게 됩니다.</p>`
-          : ''}
       </section>
       ${testament('OT', '구약')} ${testament('NT', '신약')}
       <label class="option">
@@ -274,13 +376,15 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
   };
 
   const summaryBar = () => {
-    const chapters = selectionToChapters(selectionObject());
+    const chapters = selectionToChapters(planSelection());
     const chars = chapters.reduce((s, x) => s + chapterChars(x.b, x.c), 0);
-    const bookCount = new Set(chapters.map((x) => x.b)).size;
+    let how = ' 선택';
+    if (state.mode === 'parallel') how = ` · ${new Set(chapters.map((x) => x.b)).size}권 병렬`;
+    if (isGroup()) how = ` · ${filledGroups().length}그룹`;
     return html`<div class="summary-bar">
       <div class="summary-text">
         ${chapters.length
-          ? html`<b>${formatNumber(chapters.length)}장</b>${state.mode === 'parallel' ? ` · ${bookCount}권 병렬` : ' 선택'} · 하루 평균 약 ${readingMinutes(chars / periodDays())}분`
+          ? html`<b>${formatNumber(chapters.length)}장</b>${how} · 하루 평균 약 ${readingMinutes(chars / periodDays())}분`
           : html`<span class="muted">읽을 범위를 골라 주세요</span>`}
       </div>
       ${chapters.length ? html`<button class="btn btn-ghost btn-sm" data-action="clear">초기화</button>` : ''}
@@ -328,8 +432,8 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     const minutes = days.filter((d) => d.parts.length).map((d) => readingMinutes(d.chars));
     const [lo, hi] = [Math.min(...minutes), Math.max(...minutes)];
     const totalChars = days.reduce((s, d) => s + d.chars, 0);
-    const chapters = selectionToChapters(selectionObject()).length;
-    const parallel = state.mode === 'parallel';
+    const chapters = selectionToChapters(planSelection()).length;
+    const parallel = state.mode !== 'sequential';
     setHTML(
       root,
       html`<header class="page-head month-head">
@@ -350,8 +454,8 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
           ? html`<ul class="track-summary">
               ${state.tracks.map((t) => {
                 const sum = t.days.reduce((a, d) => a + d.chars, 0);
-                const n = new Set(t.days.flatMap((d) => d.segments.map((x) => x.c))).size;
-                return html`<li><b>${t.title}</b><span>${n}${chapterUnit(t.b)} · 하루 약 ${readingMinutes(sum / total)}분</span></li>`;
+                const chs = new Map(t.days.flatMap((d) => d.segments.map((x) => [`${x.b}:${x.c}`, x])));
+                return html`<li><b>${t.title}</b><span>${chs.size}${unitOf([...chs.values()])} · 하루 약 ${readingMinutes(sum / total)}분</span></li>`;
               })}
             </ul>`
           : ''}
@@ -447,7 +551,7 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
       });
       if (!ok) return;
     }
-    const sel = selectionObject();
+    const sel = planSelection();
     const title = state.title.trim() || describeSelection(sel);
     try {
       await savePlan({
@@ -457,8 +561,8 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
         selection: sel,
         splitChapters: state.split,
         mode: state.mode,
-        // 이어서 읽기는 묶음 하나, 그 이름은 계획 이름
-        tracks: state.tracks.map((t) => ({ title: state.mode === 'parallel' ? t.title : title, days: t.days })),
+        // 이어서 읽기는 묶음 하나, 그 이름은 계획 이름. 병렬은 책 이름, 그룹은 그룹 이름.
+        tracks: state.tracks.map((t) => ({ title: state.mode === 'sequential' ? title : t.title, days: t.days })),
       });
     } catch (err) {
       toast(`저장하지 못했습니다: ${err.message}`);
@@ -481,41 +585,66 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
       state.end = LENGTHS[d.length].end(state.start);
       periodChanged();
     } else if (d.mode) {
-      state.mode = d.mode;
-    } else if (d.preset) {
-      const books = presetBooks(PRESETS[d.preset]);
+      setMode(d.mode);
+    } else if (d.group) {
+      selectGroup(Number(d.group));
+    } else if (d.action === 'add-group') {
+      state.groups.push(new Map());
+      selectGroup(state.groups.length - 1);
+    } else if (d.removeGroup) {
+      const i = Number(d.removeGroup);
+      state.groups.splice(i, 1);
+      selectGroup(Math.min(state.active > i ? state.active - 1 : state.active, state.groups.length - 1));
+      toast(`${i + 1}번 그룹을 지웠습니다`);
+    } else if (d.preset || d.testament) {
+      const books = d.preset ? presetBooks(PRESETS[d.preset]) : allBooks().filter((b) => b.testament === d.testament);
       const on = !books.every(isFull);
-      books.forEach((b) => setBook(b, on));
-    } else if (d.testament) {
-      const books = allBooks().filter((b) => b.testament === d.testament);
-      const on = !books.every(isFull);
-      books.forEach((b) => setBook(b, on));
+      movedNotice(books.reduce((n, b) => n + setBook(b, on), 0));
     } else if (d.toggleBook) {
       const b = book(d.toggleBook);
-      setBook(b, !isFull(b));
+      movedNotice(setBook(b, !isFull(b)));
     } else if (d.clearBook) {
       state.sel.delete(d.clearBook);
     } else if (d.open) {
       state.open = state.open === d.open ? null : d.open;
     } else if (d.ch) {
       const [code, c] = d.ch.split(':');
-      const set = state.sel.get(code) ?? new Set();
-      if (set.has(Number(c))) set.delete(Number(c));
-      else set.add(Number(c));
-      if (set.size) state.sel.set(code, set);
-      else state.sel.delete(code);
+      const set = state.sel.get(code);
+      if (set?.has(Number(c))) {
+        set.delete(Number(c));
+        if (!set.size) state.sel.delete(code);
+      } else {
+        movedNotice(addChapters(code, [Number(c)]));
+      }
     } else if (d.action === 'clear') {
-      state.sel.clear();
+      if (isGroup()) {
+        state.groups = [new Map()];
+        selectGroup(0);
+      } else {
+        state.sel.clear();
+      }
     } else if (d.action === 'preview') {
-      const sel = selectionObject();
+      const sel = planSelection();
       const chapters = selectionToChapters(sel);
       const days = periodDays();
       const opts = { splitChapters: state.split };
-      state.tracks =
-        state.mode === 'parallel'
-          ? buildParallelPlan(getIndex(), chapters, days, opts).map((t) => ({ b: t.b, title: book(t.b).name, days: t.days }))
-          : [{ title: '', days: buildPlan(getIndex(), chapters, days, opts) }];
-      if (!state.titleEdited) state.title = describeSelection(sel);
+      if (state.mode === 'parallel') {
+        state.tracks = buildParallelPlan(getIndex(), chapters, days, opts).map((t) => ({ title: book(t.b).name, days: t.days }));
+      } else if (isGroup()) {
+        // 빈 그룹은 빼고, 그룹 이름은 그룹에 든 범위로 짓는다 ("시편", "복음서", "이사야–예레미야")
+        const groups = filledGroups();
+        state.tracks = buildGroupPlan(getIndex(), groups.map(selectionToChapters), days, opts).map((days, i) => ({
+          title: describeSelection(groups[i]),
+          days,
+        }));
+      } else {
+        state.tracks = [{ title: '', days: buildPlan(getIndex(), chapters, days, opts) }];
+      }
+      if (!state.titleEdited) {
+        const names = state.tracks.map((t) => t.title);
+        state.title =
+          !isGroup() ? describeSelection(sel) : names.length <= 3 ? names.join(' · ') : `${names[0]} 외 ${names.length - 1}그룹`;
+      }
       state.step = 'preview';
       window.scrollTo(0, 0);
       render();
@@ -540,9 +669,7 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     let from = clamp(form.from.value);
     let to = clamp(form.to.value);
     if (from > to) [from, to] = [to, from];
-    const set = state.sel.get(b.code) ?? new Set();
-    for (let c = from; c <= to; c++) set.add(c);
-    state.sel.set(b.code, set);
+    movedNotice(addChapters(b.code, Array.from({ length: to - from + 1 }, (_, i) => from + i)));
     render();
   };
 
@@ -567,10 +694,55 @@ function clampEnd(start, end) {
   return compareDate(end, last) > 0 ? last : end;
 }
 
+// ── 고른 범위 ──────────────────────────────────────────────
+// 화면에서는 범위를 Map(code → Set(장))으로 들고, 저장·계산할 때는 {code: [장...]}으로 바꾼다.
+
+/** Map(code → Set(장)) → {code: [장...]} (성경 순서, 빈 책은 뺀다) */
+function selectionOf(map) {
+  return Object.fromEntries(
+    allBooks()
+      .filter((b) => map.get(b.code)?.size)
+      .map((b) => [b.code, [...map.get(b.code)].sort((a, c) => a - c)]),
+  );
+}
+
+const selKey = (map) => JSON.stringify(selectionOf(map));
+
+function unionOf(maps) {
+  const all = new Map();
+  for (const map of maps) {
+    for (const [code, set] of map) all.set(code, new Set([...(all.get(code) ?? []), ...set]));
+  }
+  return all;
+}
+
+/** 저장된 그룹 계획의 그룹마다 고른 장: 그 묶음(track)의 날짜별 분량에 든 장 */
+function groupsOfPlan(plan) {
+  return plan.tracks.map((t) => {
+    const map = new Map();
+    for (const d of plan.days) {
+      for (const p of d.parts) {
+        if (p.track !== t.track) continue;
+        for (const s of p.segments) {
+          if (!map.has(s.b)) map.set(s.b, new Set());
+          map.get(s.b).add(s.c);
+        }
+      }
+    }
+    return map;
+  });
+}
+
+/** 장 목록을 세는 단위: 한 책뿐이면 그 책의 단위(시편은 편), 아니면 장 */
+function unitOf(chapters) {
+  const books = new Set(chapters.map((x) => x.b));
+  return books.size === 1 ? chapterUnit([...books][0]) : '장';
+}
+
 /** 다시 그린 뒤 같은 버튼을 찾기 위한 선택자 */
 function focusSelector(el) {
   if (!el || el === document.body) return null;
-  for (const attr of ['data-ch', 'data-toggle-book', 'data-open', 'data-preset', 'data-testament', 'data-month', 'data-mode', 'data-period', 'data-length']) {
+  for (const attr of ['data-ch', 'data-toggle-book', 'data-open', 'data-preset', 'data-testament', 'data-month', 'data-mode', 'data-period', 'data-length', 'data-group']) {
     const v = el.getAttribute?.(attr);
     if (v != null) return `[${attr}="${CSS.escape(v)}"]`;
   }

@@ -131,7 +131,7 @@ export function buildPlan(index, chapters, days, { splitChapters = true } = {}) 
 }
 
 /**
- * 병렬 읽기: 고른 책마다 따로 한 달에 나눈다. 날마다 책마다 조금씩 함께 읽게 된다.
+ * 병렬 읽기: 고른 책마다 따로 기간 전체에 나눈다. 날마다 책마다 조금씩 함께 읽게 된다.
  * @returns {Array<{b: string, days: ReturnType<typeof buildPlan>}>} 책 순서는 chapters에 처음 나온 순서
  */
 export function buildParallelPlan(index, chapters, days, opts) {
@@ -140,7 +140,18 @@ export function buildParallelPlan(index, chapters, days, opts) {
     if (!byBook.has(ch.b)) byBook.set(ch.b, []);
     byBook.get(ch.b).push(ch);
   }
-  return [...byBook].map(([b, list]) => ({ b, days: buildPlan(index, list, days, opts) }));
+  const books = [...byBook.keys()];
+  return buildGroupPlan(index, [...byBook.values()], days, opts).map((days, i) => ({ b: books[i], days }));
+}
+
+/**
+ * 그룹으로 읽기: 묶음(그룹)마다 그 장들을 이어 붙여 따로 기간 전체에 나눈다.
+ * 그룹 안에서는 이어서 읽고, 날마다 그룹마다 조금씩 함께 읽게 된다.
+ * @param {Array<Array<{b: string, c: number}>>} groups 그룹마다 읽을 순서대로의 장
+ * @returns {Array<ReturnType<typeof buildPlan>>} 그룹마다 날짜별 분량
+ */
+export function buildGroupPlan(index, groups, days, opts) {
+  return groups.map((chapters) => buildPlan(index, chapters, days, opts));
 }
 
 function toSegments(group, books) {

@@ -1737,6 +1737,8 @@ main:focus-visible {
 
 .mode-tabs button {
   flex: 1;
+  min-width: 0;
+  padding: 0 4px;
 }
 
 .mode-help {
@@ -1747,6 +1749,96 @@ main:focus-visible {
 
 .mode-help + .notice {
   margin: 10px 0 0;
+}
+
+/* ── 그룹으로 읽기 ────────────────────────────────────── */
+.group-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.group-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.group-list li.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.group-item {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 6px 10px 12px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.group-num {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.is-active .group-num {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.group-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.group-text b,
+.group-text small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-text small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* 책 목록: 다른 그룹에 든 장이 있는 책 */
+.group-tag {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* 장 목록: 다른 그룹에 든 장 (누르면 지금 그룹으로 옮긴다) */
+.ch.in-other {
+  background: var(--surface-2);
+  border-style: dashed;
+  color: var(--muted);
 }
 
 /* ── 기간 ─────────────────────────────────────────────── */

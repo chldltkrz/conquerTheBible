@@ -20,7 +20,6 @@ import {
   accountStatus,
   avatar,
   bindReadToggles,
-  bookProgressList,
   checkIcon,
   dayLabel,
   dayList,
@@ -30,8 +29,10 @@ import {
   isParallel,
   modeLabel,
   newPlanHref,
+  partUnit,
   periodLabel,
   progressOf,
+  progressSection,
   readHref,
   readingStreak,
 } from './common.js';
@@ -154,7 +155,7 @@ export async function todayView(root) {
             </li>`,
           )}
         </ul>
-        <p class="today-sub">모두 약 ${readingMinutes(entry.chars)}분 · ${entry.readParts}/${entry.parts.length}권 읽음</p>
+        <p class="today-sub">모두 약 ${readingMinutes(entry.chars)}분 · ${entry.readParts}/${entry.parts.length}${partUnit(plan)} 읽음</p>
         <div class="today-actions">
           <a class="btn ${done ? 'btn-ghost' : 'btn-primary'}" href="${readHref(now)}">
             ${done ? '다시 읽기' : '읽으러 가기'}
@@ -195,12 +196,7 @@ export async function todayView(root) {
         <div class="progress" role="progressbar" aria-valuenow="${progress.percent}" aria-valuemin="0" aria-valuemax="100">
           <span style="width:${progress.percent}%"></span>
         </div>
-        ${isParallel(plan)
-          ? html`<section class="block">
-              <h2 class="block-title">책별 진도</h2>
-              ${bookProgressList(plan)}
-            </section>`
-          : ''}
+        ${isParallel(plan) ? progressSection(plan) : ''}
         ${othersBlock}
         ${missed.length
           ? html`<section class="block">
