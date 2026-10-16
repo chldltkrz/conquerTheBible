@@ -29,7 +29,8 @@ import { isDevHostname, isOptedOut, setOptOut, track } from '../analytics.js';
 const COFFEE_LINKS = [
   { label: '토스로 보내기', url: '' }, // 예: https://toss.me/아이디
   { label: '카카오페이로 보내기', url: '' }, // 예: https://qr.kakaopay.com/XXXXXXXXX
-  { label: 'Buy Me a Coffee', url: '' }, // 예: https://www.buymeacoffee.com/아이디
+  // Buy Me a Coffee 버튼 모양(노란 바탕·검은 테두리·☕)을 따르되, 외부 스크립트 없이 링크로 연다.
+  { label: '☕ 쓴물사주기', url: 'https://buymeacoffee.com/issac_choi', kind: 'bmc' },
 ];
 const coffeeLinks = COFFEE_LINKS.filter((l) => /^https:\/\//.test(l.url));
 
@@ -220,7 +221,8 @@ export async function settingsView(root, _params, { isCurrent }) {
                 ${coffeeLinks.length
                   ? html`<div class="button-row coffee-links">
                       ${coffeeLinks.map(
-                        (l) => html`<a class="btn btn-ghost btn-sm coffee-link" href="${l.url}" target="_blank" rel="noopener">${l.label}</a>`,
+                        (l) => html`<a class="btn btn-sm coffee-link ${l.kind ? `is-${l.kind}` : 'btn-ghost'}" href="${l.url}"
+                          target="_blank" rel="noopener">${l.label}</a>`,
                       )}
                     </div>`
                   : html`<p class="coffee-setup">개발용 안내: <code>app/js/views/settings.js</code>의 <code>COFFEE_LINKS</code>에 송금 링크를 넣으면 이 자리에 버튼이 생깁니다. (배포한 사이트에서는 링크가 없으면 이 칸을 숨깁니다)</p>`}

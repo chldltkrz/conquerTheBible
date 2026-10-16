@@ -800,6 +800,18 @@ main:focus-visible {
   grid-column: 1 / -1;
 }
 
+/* Buy Me a Coffee 버튼 모양 (다크 모드에서도 같은 색) */
+.coffee-link.is-bmc {
+  background: #ffdd00;
+  color: #000;
+  border: 1.5px solid #000;
+  font-weight: 800;
+}
+
+.coffee-link.is-bmc:hover {
+  background: #ffe740;
+}
+
 .coffee-setup {
   margin: 0;
   padding: 10px 12px;
