@@ -101,7 +101,7 @@ export const isParallel = (plan) => plan.mode !== 'sequential';
 /** 묶음을 세는 단위: 병렬 읽기는 책(권), 그룹으로 읽기는 그룹 */
 export const partUnit = (plan) => (plan.mode === 'group' ? '그룹' : '권');
 export const modeLabel = (plan) =>
-  plan.mode === 'parallel' ? `${plan.tracks.length}권 병렬` : plan.mode === 'group' ? `${plan.tracks.length}그룹` : '';
+  plan.mode === 'parallel' ? `${plan.tracks.length}권 동시에` : plan.mode === 'group' ? `${plan.tracks.length}그룹 동시에` : '';
 
 /** 계정을 바꾼 뒤 지금 화면을 다시 그리도록 알린다. */
 export async function changeAccount(id) {

@@ -47,6 +47,37 @@ const LENGTHS = [
 
 const sameDate = (a, b) => compareDate(a, b) === 0;
 
+/**
+ * 읽는 방식. 그림(lanes)은 기간 동안 어떻게 읽어 나가는지 보여 준다:
+ * 줄 하나가 날마다 읽는 한 군데이고, 줄 안의 칸은 왼쪽(첫날)부터 차례로 읽는 책이다.
+ */
+const MODES = [
+  {
+    id: 'sequential',
+    name: '한 권씩 차례로',
+    desc: '고른 책을 성경 순서대로 한 권씩 이어 읽어요.',
+    lanes: [['창', '출', '레', '민']],
+  },
+  {
+    id: 'parallel',
+    name: '여러 권 동시에',
+    desc: '고른 책을 날마다 조금씩 함께 읽어요. 진도도 책마다 따로 봐요.',
+    lanes: [['창'], ['마'], ['시']],
+  },
+  {
+    id: 'group',
+    name: '그룹별로 동시에',
+    desc: '책을 그룹으로 묶어요. 그룹 안에서는 한 권씩 차례로, 그룹끼리는 동시에 읽어요.',
+    lanes: [['창', '출', '레'], ['마', '막', '눅']],
+  },
+];
+const LANE_COLOR = { 창: 0, 출: 1, 레: 2, 민: 3, 마: 4, 막: 5, 눅: 6, 시: 6 };
+
+const modeArt = (lanes) => html`<span class="mode-art" aria-hidden="true">
+  ${lanes.map((lane) => html`<span class="lane">${lane.map((b) => html`<i class="k${LANE_COLOR[b]}">${b}</i>`)}</span>`)}
+  <span class="mode-axis"><span>첫날</span><span>끝날</span></span>
+</span>`;
+
 /** 주소: #/new (이번 달), #/new/2026-10 (그 달), #/new/2026-10-15/2026-11-23 (기간을 정해서) */
 export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
   const now = today();
@@ -290,8 +321,8 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
       ${started
         ? html`책을 더해 저장해도 <b>원래 책의 읽음 기록은 그대로 이어지고</b>, 새로 더한 책의 지난 날짜 분량은 밀린 읽기로 들어갑니다.
             ${state.mode === 'sequential'
-              ? html`<small class="notice-sub">이어서 읽기에서 책을 더하면 날마다 읽을 곳이 모두 바뀌어 기록이 이어지지 않습니다.
-                  읽던 책은 그대로 두고 더하려면 <b>병렬로 읽기</b>나 <b>그룹으로 읽기</b>를 고르세요.</small>`
+              ? html`<small class="notice-sub"><b>한 권씩 차례로</b> 읽는 계획에 책을 더하면 날마다 읽을 곳이 모두 바뀌어 기록이 이어지지 않습니다.
+                  읽던 책은 그대로 두고 더하려면 <b>여러 권 동시에</b>나 <b>그룹별로 동시에</b>를 고르세요.</small>`
               : ''}`
         : '고쳐서 저장하면 이 계획이 바뀝니다.'}
     </p>`;
@@ -411,7 +442,8 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
           </li>`;
         })}
       </ul>
-      <p class="mode-help">아래에서 고르는 책은 <b>그룹 ${state.active + 1}</b>에 들어갑니다. 다른 그룹에 있는 장을 고르면 이 그룹으로 옮겨집니다.</p>
+      <p class="mode-help">그룹마다 함께 읽을 책을 담으세요. 예를 들어 그룹 1에 구약, 그룹 2에 신약을 담으면 날마다 구약과 신약을 조금씩 함께 읽어요.
+        아래에서 고르는 책은 <b>그룹 ${state.active + 1}</b>에 들어갑니다. 다른 그룹에 있는 장을 고르면 이 그룹으로 옮겨집니다.</p>
     </section>`;
   };
 
@@ -431,21 +463,19 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
         <ul class="book-list">${list.map(bookRow)}</ul>
       </section>`;
     };
-    const help = {
-      sequential: '고른 책을 성경 순서대로 이어 붙여 기간 전체에 나눕니다.',
-      parallel: '고른 책마다 따로 기간 전체에 나눕니다. 날마다 책마다 조금씩 함께 읽고, 진도도 책마다 따로 봅니다.',
-      group: '책을 여러 그룹으로 묶고, 그룹마다 따로 기간 전체에 나눕니다. 그룹 안에서는 성경 순서대로 이어 읽고, 날마다 그룹마다 조금씩 함께 읽습니다.',
-    };
     return html`<section class="block">
-        <h2 class="block-title">읽는 방식</h2>
-        <div class="segmented mode-tabs" role="radiogroup" aria-label="읽는 방식">
-          <button role="radio" data-mode="sequential" aria-checked="${state.mode === 'sequential'}">이어서 읽기</button>
-          <button role="radio" data-mode="parallel" aria-checked="${state.mode === 'parallel'}">병렬로 읽기</button>
-          <button role="radio" data-mode="group" aria-checked="${state.mode === 'group'}">그룹으로 읽기</button>
+        <h2 class="block-title">어떻게 읽을까요?</h2>
+        <div class="mode-cards" role="radiogroup" aria-label="읽는 방식">
+          ${MODES.map(
+            (m) => html`<button class="mode-card" role="radio" data-mode="${m.id}" aria-checked="${state.mode === m.id}">
+              <span class="mode-radio" aria-hidden="true"></span>
+              <span class="mode-text"><b>${m.name}</b><small>${m.desc}</small></span>
+              ${modeArt(m.lanes)}
+            </button>`,
+          )}
         </div>
-        <p class="mode-help">${help[state.mode]}</p>
         ${state.mode === 'parallel' && bookCount > 6
-          ? html`<p class="notice">${bookCount}권을 병렬로 읽으면 날마다 ${bookCount}군데를 읽게 됩니다.</p>`
+          ? html`<p class="notice">${bookCount}권을 동시에 읽으면 날마다 ${bookCount}군데를 읽게 됩니다.</p>`
           : ''}
         ${groupCount > 6 ? html`<p class="notice">${groupCount}그룹이면 날마다 ${groupCount}군데를 읽게 됩니다.</p>` : ''}
       </section>
@@ -471,8 +501,8 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     const chapters = selectionToChapters(planSelection());
     const chars = chapters.reduce((s, x) => s + chapterChars(x.b, x.c), 0);
     let how = ' 선택';
-    if (state.mode === 'parallel') how = ` · ${new Set(chapters.map((x) => x.b)).size}권 병렬`;
-    if (isGroup()) how = ` · ${filledGroups().length}그룹`;
+    if (state.mode === 'parallel') how = ` · ${new Set(chapters.map((x) => x.b)).size}권 동시에`;
+    if (isGroup()) how = ` · ${filledGroups().length}그룹 동시에`;
     return html`<div class="summary-bar">
       <div class="summary-text">
         ${chapters.length

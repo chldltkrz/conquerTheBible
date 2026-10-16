@@ -159,7 +159,7 @@ export async function settingsView(root, _params, { isCurrent }) {
                     <a href="#/month/${ymKey(p.start.y, p.start.m)}">
                       <b>${period}</b>
                       <small>${p.readDays}/${p.readingDays}일 읽음</small>
-                      <span>${p.title}${p.mode === 'parallel' ? ' · 병렬' : p.mode === 'group' ? ' · 그룹' : ''}${isMonthPlan(p) ? '' : ` · ${p.length}일`}</span>
+                      <span>${p.title}${p.mode === 'parallel' ? ' · 여러 권 동시에' : p.mode === 'group' ? ' · 그룹별로 동시에' : ''}${isMonthPlan(p) ? '' : ` · ${p.length}일`}</span>
                     </a>
                     <button class="icon-btn danger" data-delete="${p.id}" data-label="${period} ${p.title}"
                       aria-label="${period} 계획 삭제">✕</button>
