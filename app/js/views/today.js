@@ -13,10 +13,12 @@ import {
   today,
   ymKey,
 } from '../dates.js';
-import { currentAccount, listAccounts, listPlans, planOn, plansOverlapping, rebalancePlan } from '../db.js';
+import { currentAccount, listAccounts, listPlans, planOn, plansOverlapping, rebalancePlan, saveVerseToday } from '../db.js';
 import { confirmDialog, html, setHTML, formatNumber, toast } from '../ui.js';
 import { track } from '../analytics.js';
+import { dailyVerseRef, loadPassage, passageRef, passageText } from '../verses.js';
 import { openStatSheet } from './stats.js';
+import { openYearVerseEditor, yearVerseBox } from './yearverse.js';
 
 // 진행 상황 칸을 누를 수 있다는 표시
 const moreIcon = html`<svg class="stat-more" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>`;
@@ -25,6 +27,7 @@ import {
   accountStatus,
   avatar,
   bindReadToggles,
+  bookmarkIcon,
   checkIcon,
   dayLabel,
   dayList,
@@ -41,9 +44,58 @@ import {
   progressSection,
   readHref,
   readingStreak,
+  shareIcon,
+  shareVerses,
 } from './common.js';
 
+/** 오늘의 말씀 자리. 본문은 화면을 그린 뒤 fillDailyVerse()가 불러와 채운다. */
+const dailyVerseBlock = () => html`<section class="block">
+  <h2 class="block-title">오늘의 말씀</h2>
+  <article class="daily-verse" id="daily-verse" aria-busy="true">
+    <p class="dv-text is-loading">말씀을 불러오는 중…</p>
+  </article>
+</section>`;
+
 export async function todayView(root) {
+  let daily = null; // 지금 보여 준 오늘의 말씀 {ref, verses} (공유·저장용)
+
+  const fillDailyVerse = async () => {
+    const el = root.querySelector('#daily-verse');
+    if (!el) return;
+    const ref = dailyVerseRef(today());
+    try {
+      const verses = await loadPassage(ref);
+      if (!verses.length) throw new Error('없는 구절');
+      daily = { ref, verses };
+      if (!el.isConnected) return;
+      setHTML(
+        el,
+        html`<p class="dv-text">${passageText(verses)}</p>
+          <p class="dv-ref">${passageRef(ref)}</p>
+          <div class="dv-actions">
+            <button class="link" data-action="share-daily">${shareIcon}<span>공유</span></button>
+            <button class="link" data-action="save-daily">${bookmarkIcon}<span>저장</span></button>
+          </div>`,
+      );
+      el.removeAttribute('aria-busy');
+    } catch {
+      if (el.isConnected) setHTML(el, html`<p class="dv-text is-loading">말씀을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.</p>`);
+    }
+  };
+
+  const saveDaily = async () => {
+    if (!daily) return;
+    let added = 0;
+    try {
+      for (const x of daily.verses) if (await saveVerseToday(x)) added++;
+    } catch (err) {
+      toast(`저장하지 못했습니다: ${err.message}`);
+      return;
+    }
+    if (added) track('verses_saved', { surface: 'today', count: added });
+    toast(added ? `${passageRef(daily.ref)} 말씀을 저장했습니다` : '오늘 이미 저장한 말씀입니다');
+  };
+
   const render = () => {
     const now = today();
     const plan = planOn(now);
@@ -104,13 +156,15 @@ export async function todayView(root) {
       const thirty = addDays(now, 29);
       const beforeNext = upcomingPlan && addDays(upcomingPlan.start, -1);
       const fromToday = newPlanHref(now, beforeNext && compareDate(beforeNext, thirty) < 0 ? beforeNext : thirty);
+      // 읽기 계획이 없으면 오늘의 통독 대신 오늘의 말씀을 보여 주고, 계획 만들기를 권한다.
       setHTML(
         root,
         html`${head}
-          <section class="empty">
-            <img class="empty-mark" src="icons/icon.svg" alt="" />
-            <h2>오늘 읽을 계획이 없습니다</h2>
-            <p>읽고 싶은 성경 범위를 고르면 날마다 고르게 나누어 드립니다. 기본은 한 달이고, 기간을 직접 정할 수도 있습니다.</p>
+          ${yearVerseBox(now)}
+          ${dailyVerseBlock()}
+          <section class="plan-cta">
+            <h2>오늘의 통독을 시작해 보세요</h2>
+            <p>읽고 싶은 성경 범위를 고르면 날마다 고르게 나누어 드립니다. 계획을 만들면 이 자리에 오늘 읽을 분량이 나옵니다.</p>
             <div class="button-row is-center">
               ${monthFree
                 ? html`<a class="btn btn-primary" href="#/new/${ymKey(now.y, now.m)}">${now.m}월 계획 만들기</a>
@@ -127,6 +181,7 @@ export async function todayView(root) {
             : ''}
           ${othersBlock}`,
       );
+      fillDailyVerse();
       return;
     }
 
@@ -194,7 +249,10 @@ export async function todayView(root) {
     setHTML(
       root,
       html`${head}
+        ${yearVerseBox(now)}
+        <h2 class="block-title today-label">오늘의 통독</h2>
         ${todayCard}
+        ${entry.segments.length ? '' : dailyVerseBlock()}
         <section class="stats" aria-label="진행 상황 (누르면 자세히 봅니다)">
           <button class="stat" data-stat="days" aria-label="읽은 날 ${progress.done}/${progress.total}일, 자세히 보기">
             ${moreIcon}<b>${progress.done}<small>/${progress.total}일</small></b><span>읽은 날</span>
@@ -232,6 +290,7 @@ export async function todayView(root) {
           : ''}
         ${nextCard}`,
     );
+    fillDailyVerse(); // 쉬는 날에는 오늘의 말씀을 함께 보여 준다
   };
 
   const rebalance = async () => {
@@ -275,6 +334,9 @@ export async function todayView(root) {
   const onToggle = root.onclick;
   root.onclick = (e) => {
     if (e.target.closest('[data-action="rebalance"]')) return rebalance();
+    if (e.target.closest('[data-action="edit-year-verse"]')) return openYearVerseEditor(render);
+    if (e.target.closest('[data-action="share-daily"]')) return daily && shareVerses(daily.verses, 'today');
+    if (e.target.closest('[data-action="save-daily"]')) return saveDaily();
     const stat = e.target.closest('[data-stat]');
     if (stat) return openStatSheet(stat.dataset.stat);
     return onToggle(e);

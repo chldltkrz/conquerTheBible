@@ -367,7 +367,10 @@ export function renameAccount(id, name) {
 /** 계정과 그 계정의 계획·기록·저장한 구절을 모두 지운다. 마지막 계정은 지울 수 없다. */
 export async function deleteAccount(id) {
   if (one('SELECT COUNT(*) AS n FROM accounts').n <= 1) throw new Error('계정이 하나뿐이라 지울 수 없습니다');
-  await write(() => db.run('DELETE FROM accounts WHERE id = $id', { $id: id }));
+  await write(() => {
+    db.run('DELETE FROM accounts WHERE id = $id', { $id: id });
+    db.run('DELETE FROM settings WHERE key = $k', { $k: yearVerseKey(id) });
+  });
   if (id === accountId) await switchAccount(listAccounts()[0].id);
 }
 
@@ -837,6 +840,15 @@ export function setSetting(key, value) {
     ),
   );
 }
+
+// 올해의 말씀은 계정마다 따로 둔다. (설정 표에 계정 번호를 붙인 열쇠로)
+const yearVerseKey = (account) => `yearVerse:${account}`;
+
+/** 지금 계정의 올해의 말씀 {year, text, ref, b?, c?, v?, to?}. 정한 적이 없으면 null */
+export const yearVerse = () => getSetting(yearVerseKey(accountId));
+
+/** 올해의 말씀을 저장한다. null이면 지운다. */
+export const saveYearVerse = (value) => setSetting(yearVerseKey(accountId), value ?? null);
 
 // ── 백업 ───────────────────────────────────────────────────
 

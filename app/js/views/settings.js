@@ -20,7 +20,20 @@ import { confirmDialog, html, setHTML, toast } from '../ui.js';
 import { avatar, isMonthPlan, periodLabel } from './common.js';
 import { koreanVoices, pickVoice, player, RATES, voicesReady } from '../tts.js';
 import { rateLabel, speakerIcon } from './listen.js';
-import { isOptedOut, setOptOut, track } from '../analytics.js';
+import { isDevHostname, isOptedOut, setOptOut, track } from '../analytics.js';
+
+/**
+ * 개발자에게 커피 보내기: 송금 링크를 넣으면 설정 화면에 그 버튼이 생긴다. 주소가 빈 항목은 보이지 않는다.
+ * 모두 비어 있으면 배포한 사이트에서는 이 칸을 숨긴다(개발 주소에서만 넣는 법을 안내한다).
+ */
+const COFFEE_LINKS = [
+  { label: '토스로 보내기', url: '' }, // 예: https://toss.me/아이디
+  { label: '카카오페이로 보내기', url: '' }, // 예: https://qr.kakaopay.com/XXXXXXXXX
+  { label: 'Buy Me a Coffee', url: '' }, // 예: https://www.buymeacoffee.com/아이디
+];
+const coffeeLinks = COFFEE_LINKS.filter((l) => /^https:\/\//.test(l.url));
+
+const coffeeIcon = html`<svg viewBox="0 0 24 24"><path d="M5 9h11v5a5 5 0 0 1-5 5h-1a5 5 0 0 1-5-5V9zM16 10.5h1.5a2.5 2.5 0 0 1 0 5H16M8 3.5c0 1 1 1.3 1 2.3M11.5 3.5c0 1 1 1.3 1 2.3" /></svg>`;
 
 const manualIcon = html`<svg viewBox="0 0 24 24"><path d="M4 5.5C4 4.7 4.7 4 5.5 4H10a2 2 0 0 1 2 2v14a1.5 1.5 0 0 0-1.5-1.5H4zM20 5.5c0-.8-.7-1.5-1.5-1.5H14a2 2 0 0 0-2 2v14a1.5 1.5 0 0 1 1.5-1.5H20z" /></svg>`;
 
@@ -194,6 +207,26 @@ export async function settingsView(root, _params, { isCurrent }) {
             <p class="muted small">어떤 기능을 얼마나 쓰는지 익명으로 모아 앱을 고치는 데 씁니다. 계정 이름, 계획 이름, 메모, 구절, 검색어는 보내지 않습니다.</p>
           </div>
         </section>
+
+        ${coffeeLinks.length || isDevHostname(location.hostname)
+          ? html`<section class="block">
+              <h2 class="block-title">개발자 응원하기</h2>
+              <div class="card coffee-card">
+                <span class="coffee-icon" aria-hidden="true">${coffeeIcon}</span>
+                <div class="coffee-text">
+                  <b>개발자에게 커피 한 잔 보내기</b>
+                  <p class="muted small">이 앱이 말씀 읽기에 도움이 되었다면 커피 한 잔으로 응원해 주세요. 앱은 앞으로도 무료입니다.</p>
+                </div>
+                ${coffeeLinks.length
+                  ? html`<div class="button-row coffee-links">
+                      ${coffeeLinks.map(
+                        (l) => html`<a class="btn btn-ghost btn-sm coffee-link" href="${l.url}" target="_blank" rel="noopener">${l.label}</a>`,
+                      )}
+                    </div>`
+                  : html`<p class="coffee-setup">개발용 안내: <code>app/js/views/settings.js</code>의 <code>COFFEE_LINKS</code>에 송금 링크를 넣으면 이 자리에 버튼이 생깁니다. (배포한 사이트에서는 링크가 없으면 이 칸을 숨깁니다)</p>`}
+              </div>
+            </section>`
+          : ''}
 
         <section class="block about">
           <p>성경 본문: 새번역 © 대한성서공회. 개인 묵상과 읽기 용도로만 사용하세요.</p>

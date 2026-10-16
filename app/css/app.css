@@ -517,6 +517,298 @@ main:focus-visible {
   color: var(--muted);
 }
 
+/* ── 올해의 말씀 · 오늘의 통독 · 오늘의 말씀 ───────────── */
+.year-verse {
+  position: relative;
+  margin: 2px 0 22px;
+  padding: 16px 48px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: linear-gradient(160deg, var(--accent-soft) 0%, var(--surface) 75%);
+  text-align: center;
+}
+
+.yv-label {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+
+.yv-text {
+  margin: 8px 0 0;
+  font-family: var(--read-font);
+  font-size: 17px;
+  line-height: 1.65;
+  word-break: keep-all;
+}
+
+.yv-text::before {
+  content: '“';
+}
+
+.yv-text::after {
+  content: '”';
+}
+
+.yv-ref {
+  margin: 6px 0 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.yv-empty {
+  margin: 6px 0 10px;
+  color: var(--muted);
+  font-size: 14.5px;
+}
+
+/* 상자 오른쪽 위의 바꾸기 버튼 */
+.yv-edit {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 38px;
+  height: 38px;
+}
+
+.yv-edit svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: var(--ink-2);
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.today-label {
+  margin-top: 0;
+}
+
+.daily-verse {
+  position: relative;
+  padding: 22px 20px 14px;
+  border-radius: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.daily-verse::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  background: var(--sat);
+}
+
+.dv-text {
+  margin: 0;
+  font-family: var(--read-font);
+  font-size: 19px;
+  line-height: 1.75;
+  word-break: keep-all;
+}
+
+.dv-text.is-loading {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  color: var(--muted);
+  padding-bottom: 8px;
+}
+
+.dv-ref {
+  margin: 10px 0 0;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.dv-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 16px;
+  margin-top: 6px;
+}
+
+.dv-actions .link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+}
+
+.dv-actions svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 읽기 계획이 없을 때: 오늘의 말씀 아래에서 계획 만들기를 권한다 */
+.plan-cta {
+  margin-top: 16px;
+  padding: 20px 18px;
+  border-radius: var(--radius);
+  border: 1px dashed var(--line);
+  text-align: center;
+}
+
+.plan-cta h2 {
+  font-size: 17px;
+}
+
+.plan-cta p {
+  margin: 6px 0 14px;
+  color: var(--ink-2);
+  font-size: 14.5px;
+}
+
+/* 올해의 말씀 정하기 창 */
+.yv-dialog {
+  width: min(94vw, 420px);
+  max-height: 92dvh;
+  overflow-y: auto;
+}
+
+.yv-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 14px 0 4px;
+}
+
+.yv-suggest .chip {
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 13.5px;
+}
+
+.yv-pick {
+  margin: 12px 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.yv-pick legend {
+  padding: 0 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.yv-pick select {
+  width: 100%;
+  height: 42px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.yv-nums {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.yv-nums input {
+  width: 52px;
+  height: 40px;
+  padding: 0 6px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  text-align: center;
+  font: inherit;
+}
+
+.yv-nums .btn {
+  margin-left: auto;
+}
+
+.yv-form textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--read-font);
+  font-size: 16px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.yv-form .field span small {
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.yv-clear {
+  margin-right: auto;
+  color: var(--danger);
+}
+
+/* 설정: 개발자에게 커피 보내기 */
+.coffee-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+.coffee-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.coffee-icon svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.coffee-text p {
+  margin: 4px 0 0;
+}
+
+.coffee-links,
+.coffee-setup {
+  grid-column: 1 / -1;
+}
+
+.coffee-setup {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
 /* 누르면 자세히 보기 창이 열린다 */
 button.stat {
   position: relative;

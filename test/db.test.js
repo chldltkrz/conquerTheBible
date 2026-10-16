@@ -4,7 +4,11 @@ import { createRequire } from 'node:module';
 import {
   MAX_PLAN_DAYS,
   createAccount,
+  deleteAccount,
+  getSetting,
+  saveYearVerse,
   switchAccount,
+  yearVerse,
   MIGRATIONS,
   migrate,
   useMemoryDatabase,
@@ -405,4 +409,23 @@ test('검색에서 저장: 같은 날 같은 절은 한 번만 센다', async ()
   assert.equal(await saveVerseToday(x), true);
   assert.equal(await saveVerseToday(x), false);
   assert.equal(listSavedVerses()[0].times, 1);
+});
+
+test('올해의 말씀은 계정마다 따로 두고, 계정을 지우면 함께 지운다', async () => {
+  useMemoryDatabase(new SQL.Database());
+  assert.equal(yearVerse(), null);
+  await saveYearVerse({ year: 2026, text: '내가 이제 새 일을 하려고 한다.', ref: '이사야서 43:19' });
+  assert.equal(yearVerse().ref, '이사야서 43:19');
+
+  const mom = await createAccount('엄마');
+  await switchAccount(mom);
+  assert.equal(yearVerse(), null, '다른 계정에는 없다');
+  await saveYearVerse({ year: 2026, text: '주님은 나의 목자시니', ref: '시편 23:1' });
+  await switchAccount(1);
+  assert.equal(yearVerse().ref, '이사야서 43:19');
+
+  await deleteAccount(mom);
+  assert.equal(getSetting(`yearVerse:${mom}`), null);
+  await saveYearVerse(null);
+  assert.equal(yearVerse(), null);
 });
