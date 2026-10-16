@@ -492,10 +492,35 @@ export function listPlans() {
 }
 
 /**
- * 지금 계정에 start부터 end까지(포함)의 계획을 저장한다. 기간이 겹치는 계획이 있으면
- * 읽음 기록과 함께 지우고 새로 만든다. (그 계획에서 저장한 구절은 남는다)
- * @param {{start, end, title, selection, splitChapters, mode: 'sequential'|'parallel',
- *          tracks: Array<{title, days: Array<{segments, chars}>}>}} plan  묶음마다 days 길이 = 기간의 날 수
+ * 날짜와 읽을 범위로 만든 열쇠. 계획을 고쳐 저장할 때, 같은 날짜에 같은 범위가 그대로 있으면
+ * 그 읽음 기록을 새 계획으로 옮기는 데 쓴다. date는 {y, m, d} 또는 'YYYY-MM-DD'
+ */
+export function partKey(date, segments) {
+  const iso = typeof date === 'string' ? date : toISO(date);
+  return `${iso}|${segments.map((s) => `${s.b}.${s.c}.${s.from ?? ''}.${s.to ?? ''}`).join(',')}`;
+}
+
+/** 계획의 묶음마다 날짜별 분량을 저장된 그대로 [{track, title, days: [{segments, chars, moved}]}] */
+export function planTrackDays(planId) {
+  const tracks = all('SELECT track, title FROM plan_tracks WHERE plan_id = $id ORDER BY track', { $id: planId }).map(
+    (t) => ({ track: t.track, title: t.title, days: [] }),
+  );
+  const byTrack = new Map(tracks.map((t) => [t.track, t]));
+  for (const d of all('SELECT track, segments, chars, moved FROM plan_days WHERE plan_id = $id ORDER BY track, day', {
+    $id: planId,
+  })) {
+    byTrack.get(d.track)?.days.push({ segments: JSON.parse(d.segments), chars: d.chars, moved: !!d.moved });
+  }
+  return tracks;
+}
+
+/**
+ * 지금 계정에 start부터 end까지(포함)의 계획을 저장한다. 기간이 겹치는 계획이 있으면 지우고 새로 만들되,
+ * 같은 날짜에 같은 범위를 읽은 기록은 새 계획으로 옮긴다. 그래서 읽던 계획에 책(묶음)을 더해도
+ * 그대로 둔 책의 진도는 남고, 새 책의 지난 날짜 분량만 밀린 읽기가 된다. (그 계획에서 저장한 구절도 남는다)
+ * @param {{start, end, title, selection, splitChapters, mode: 'sequential'|'parallel'|'group',
+ *          tracks: Array<{title, days: Array<{segments, chars, moved?}>}>}} plan  묶음마다 days 길이 = 기간의 날 수.
+ *          moved는 다시 나누기로 비운 날 (고치지 않은 묶음을 그대로 옮길 때)
  */
 export function savePlan({ start, end, title, selection, splitChapters, mode, tracks }) {
   const length = daysBetween(start, end) + 1;
@@ -503,11 +528,19 @@ export function savePlan({ start, end, title, selection, splitChapters, mode, tr
   if (tracks.some((t) => t.days.length !== length)) throw new Error('날짜별 분량이 기간과 맞지 않습니다');
   const sum = (days) => days.reduce((s, d) => s + d.chars, 0);
   return write(() => {
-    db.run('DELETE FROM plans WHERE account_id = $a AND start_date <= $e AND end_date >= $s', {
-      $a: accountId,
-      $s: toISO(start),
-      $e: toISO(end),
-    });
+    const range = { $a: accountId, $s: toISO(start), $e: toISO(end) };
+    // 지우기 전에 겹치는 계획의 읽음 기록을 날짜·범위로 잡아 둔다.
+    const kept = new Map(
+      all(
+        `SELECT date(p.start_date, '+' || (d.day - 1) || ' days') AS date, d.segments, r.read_at
+           FROM readings r
+           JOIN plan_days d ON d.plan_id = r.plan_id AND d.track = r.track AND d.day = r.day
+           JOIN plans p ON p.id = r.plan_id
+          WHERE p.account_id = $a AND p.start_date <= $e AND p.end_date >= $s`,
+        range,
+      ).map((r) => [partKey(r.date, JSON.parse(r.segments)), r.read_at]),
+    );
+    db.run('DELETE FROM plans WHERE account_id = $a AND start_date <= $e AND end_date >= $s', range);
     db.run(
       `INSERT INTO plans (account_id, start_date, end_date, title, mode, selection, split_chapters, total_chars, created_at)
        VALUES ($a, $s, $e, $title, $mode, $sel, $split, $total, $now)`,
@@ -525,15 +558,21 @@ export function savePlan({ start, end, title, selection, splitChapters, mode, tr
     );
     const id = lastId();
     const insTrack = db.prepare('INSERT INTO plan_tracks (plan_id, track, title, total_chars) VALUES (?, ?, ?, ?)');
-    const insDay = db.prepare('INSERT INTO plan_days (plan_id, track, day, segments, chars) VALUES (?, ?, ?, ?, ?)');
+    const insDay = db.prepare('INSERT INTO plan_days (plan_id, track, day, segments, chars, moved) VALUES (?, ?, ?, ?, ?, ?)');
+    const insRead = db.prepare('INSERT INTO readings (plan_id, track, day, read_at) VALUES (?, ?, ?, ?)');
     try {
       tracks.forEach((t, track) => {
         insTrack.run([id, track, t.title, sum(t.days)]);
-        t.days.forEach((d, i) => insDay.run([id, track, i + 1, JSON.stringify(d.segments), d.chars]));
+        t.days.forEach((d, i) => {
+          insDay.run([id, track, i + 1, JSON.stringify(d.segments), d.chars, d.moved ? 1 : 0]);
+          const readAt = d.segments.length ? kept.get(partKey(addDays(start, i), d.segments)) : null;
+          if (readAt) insRead.run([id, track, i + 1, readAt]);
+        });
       });
     } finally {
       insTrack.free();
       insDay.free();
+      insRead.free();
     }
     return id;
   });

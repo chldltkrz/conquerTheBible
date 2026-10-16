@@ -188,14 +188,50 @@ test('병렬 계획: 묶음마다 따로 읽음 표시하고, 모두 읽은 날�
   assert.deepEqual(plan.days[0].parts.map((p) => p.readAt), [null, null]);
 });
 
-test('같은 기간 계획을 다시 저장하면 이전 묶음과 읽음 기록이 함께 지워진다', async () => {
+test('같은 기간 계획을 다시 저장하면 이전 묶음은 지우고, 같은 날짜에 같은 범위를 읽은 기록만 옮긴다', async () => {
   useMemoryDatabase(new SQL.Database());
   await savePlan(parallel);
-  await setRead(planOn(nov1).id, 1, true);
-  await savePlan({ ...parallel, mode: 'sequential', tracks: [parallel.tracks[0]] });
-  const plan = planOn(nov1);
+  const id = planOn(nov1).id;
+  await setRead(id, 1, true); // 첫날: 창세기·출애굽기 모두
+  await setRead(id, 2, true, 0); // 둘째 날: 창세기만
+
+  // 읽던 계획에 레위기를 더하고 출애굽기는 뺀다. 레위기가 앞 묶음이 되어 창세기의 묶음 번호가 바뀐다.
+  const lev = { title: '레위기', days: [1, 2, 3].map((c) => ({ segments: seg('lev', c), chars: 80 })) };
+  await savePlan({ ...parallel, selection: { gen: [1, 2, 3], lev: [1, 2, 3] }, tracks: [lev, parallel.tracks[0]] });
+  let plan = planOn(nov1);
+  assert.deepEqual(plan.tracks.map((t) => t.title), ['레위기', '창세기']);
+  assert.deepEqual(
+    plan.days.map((d) => d.parts.map((p) => [p.title, !!p.readAt])),
+    [
+      [['레위기', false], ['창세기', true]],
+      [['레위기', false], ['창세기', true]],
+      [['레위기', false], ['창세기', false]],
+    ],
+    '창세기 진도는 남고, 새로 더한 레위기는 안 읽은 분량이 된다',
+  );
+  assert.deepEqual(readDates(), [], '새 책을 더한 날은 아직 다 읽은 날이 아니다');
+  await setRead(plan.id, 1, true, 0);
+  assert.deepEqual(readDates(), [nov1]);
+
+  // 범위가 바뀐 날의 기록은 옮기지 않는다. 다시 나누기로 비운 날(moved)은 그대로 저장한다.
+  await savePlan({
+    ...parallel,
+    mode: 'sequential',
+    tracks: [
+      {
+        title: '창세기',
+        days: [
+          { segments: [{ b: 'gen', c: 1, from: 1, to: 10 }], chars: 50 },
+          { segments: [], chars: 0, moved: true },
+          { segments: seg('gen', 3), chars: 100 },
+        ],
+      },
+    ],
+  });
+  plan = planOn(nov1);
   assert.equal(plan.tracks.length, 1);
   assert.ok(plan.days.every((d) => d.readAt == null));
+  assert.deepEqual(plan.days.map((d) => d.moved), [false, true, false]);
   assert.deepEqual(readDates(), []);
 });
 

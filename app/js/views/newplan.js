@@ -30,7 +30,7 @@ import {
   today,
   ymKey,
 } from '../dates.js';
-import { listPlans, MAX_PLAN_DAYS, plansOverlapping, savePlan } from '../db.js';
+import { listPlans, MAX_PLAN_DAYS, partKey, planTrackDays, plansOverlapping, savePlan } from '../db.js';
 import { buildGroupPlan, buildParallelPlan, buildPlan } from '../planner.js';
 import { confirmDialog, formatNumber, html, setHTML, toast } from '../ui.js';
 import { accountPrefix, dayDate, dayList, newPlanHref, periodLabel } from './common.js';
@@ -135,6 +135,65 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     };
   };
 
+  /**
+   * 같은 기간의 계획을 고칠 때, 범위를 바꾸지 않은 묶음(책·그룹)은 저장된 날짜별 분량을 그대로 쓴다.
+   * 그래야 다시 나누기로 옮긴 분량까지 그대로 이어지고, 읽음 기록도 모두 남는다.
+   */
+  const keepUnchangedTracks = () => {
+    const existing = samePeriodPlan();
+    if (!existing || existing.splitChapters !== state.split) return;
+    const saved = new Map(planTrackDays(existing.id).map((t) => [chapterSetKey(t.days), t.days]));
+    state.tracks = state.tracks.map((t) => {
+      const days = saved.get(chapterSetKey(t.days));
+      return days ? { ...t, days } : t;
+    });
+  };
+
+  /**
+   * 저장하면 읽음 기록이 어떻게 되는지 미리 센다 (db.savePlan과 같은 규칙: 같은 날짜에 같은 범위면 기록이 이어진다).
+   *   keptDays: 기록이 이어지는 날, missedDays: 오늘 전인데 안 읽은 분량이 남는 날(밀린 읽기),
+   *   missedByTrack: 묶음 이름 → 밀린 날 수, lostDays: 범위가 바뀌어 기록이 지워지는 날, pastDays: 오늘 전 날 수
+   */
+  const carrySummary = () => {
+    const { start, end } = period();
+    const oldRead = new Map(); // partKey → 그 날짜
+    for (const p of plansOverlapping(start, end)) {
+      for (const d of p.days) for (const part of d.parts) if (part.readAt) oldRead.set(partKey(d.date, part.segments), toISO(d.date));
+    }
+    const pastDays = Math.min(periodDays(), Math.max(0, daysBetween(start, now)));
+    const kept = new Set();
+    const keptDays = new Set();
+    const missedDays = new Set();
+    const missedByTrack = new Map();
+    for (const t of state.tracks) {
+      t.days.forEach((d, i) => {
+        if (!d.segments.length) return;
+        const key = partKey(addDays(start, i), d.segments);
+        if (oldRead.has(key)) {
+          kept.add(key);
+          keptDays.add(i);
+        } else if (i < pastDays) {
+          missedDays.add(i);
+          missedByTrack.set(t.title, (missedByTrack.get(t.title) ?? 0) + 1);
+        }
+      });
+    }
+    return {
+      isRead: (date, segments) => kept.has(partKey(date, segments)),
+      keptDays: keptDays.size,
+      missedDays: missedDays.size,
+      missedByTrack,
+      lostDays: new Set([...oldRead].filter(([key]) => !kept.has(key)).map(([, iso]) => iso)).size,
+      pastDays,
+    };
+  };
+
+  /** 밀린 분량을 묶음별로: "(출애굽기 15일 치)" — 이어서 읽기면 "(15일 치)" */
+  const missedText = (c) =>
+    state.mode === 'sequential' || !c.missedByTrack.size
+      ? `${c.missedDays}일 치`
+      : [...c.missedByTrack].map(([title, n]) => `${title} ${n}일 치`).join(', ');
+
   function selectGroup(i) {
     state.active = i;
     state.sel = state.groups[i];
@@ -215,13 +274,27 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
       <p class="lead">읽을 범위를 고르면 ${state.period === 'month'
         ? `${state.m}월 1일부터 ${end.d}일까지`
         : `${formatDate(start)}부터 ${formatDate(end)}까지 ${days}일 동안`} 날마다 비슷한 분량으로 나눕니다.</p>
-      ${same
-        ? html`<p class="notice">${state.period === 'month' ? '이 달에는' : '이 기간에는'} 이미 <b>${overlaps[0].title}</b> 계획이 있습니다. 새로 저장하면 기존 계획과 읽음 기록이 지워집니다.</p>`
-        : overlaps.length
+      ${same ? sameNotice(overlaps[0]) : overlaps.length
           ? html`<p class="notice">기간이 겹치는 계획이 있습니다:
               ${overlaps.map((p, i) => html`${i ? ', ' : ''}<b>${p.title}</b> (${periodLabel(p)})`)}.
-              새로 저장하면 겹치는 계획과 그 읽음 기록이 지워집니다.</p>`
+              새로 저장하면 겹치는 계획은 지워지고, 같은 날짜에 같은 범위를 읽은 기록만 이어집니다.</p>`
           : ''}`;
+  };
+
+  /** 같은 기간에 계획이 있어 불러왔을 때: 고쳐서 저장하면 읽음 기록이 어떻게 되는지 */
+  const sameNotice = (existing) => {
+    const where = state.period === 'month' ? '이 달에는' : '이 기간에는';
+    const started = existing.days.some((d) => d.readParts);
+    return html`<p class="notice">
+      ${where} 이미 <b>${existing.title}</b> 계획이 있어 그 범위를 불러왔습니다.
+      ${started
+        ? html`책을 더해 저장해도 <b>원래 책의 읽음 기록은 그대로 이어지고</b>, 새로 더한 책의 지난 날짜 분량은 밀린 읽기로 들어갑니다.
+            ${state.mode === 'sequential'
+              ? html`<small class="notice-sub">이어서 읽기에서 책을 더하면 날마다 읽을 곳이 모두 바뀌어 기록이 이어지지 않습니다.
+                  읽던 책은 그대로 두고 더하려면 <b>병렬로 읽기</b>나 <b>그룹으로 읽기</b>를 고르세요.</small>`
+              : ''}`
+        : '고쳐서 저장하면 이 계획이 바뀝니다.'}
+    </p>`;
   };
 
   /** 기간을 직접 정할 때 빠른 길이 선택 */
@@ -446,13 +519,38 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     // 날마다 모든 묶음을 합친 분량
     const days = Array.from({ length: total }, (_, i) => {
       const parts = state.tracks.map((t) => t.days[i]).filter((x) => x.segments.length);
-      return { date: addDays(start, i), parts, chars: parts.reduce((a, p) => a + p.chars, 0) };
+      const moved = state.tracks.some((t) => t.days[i].moved); // 그대로 이어 쓰는 묶음에서 다시 나누기로 비운 날
+      return { date: addDays(start, i), parts, moved, chars: parts.reduce((a, p) => a + p.chars, 0) };
     });
     const minutes = days.filter((d) => d.parts.length).map((d) => readingMinutes(d.chars));
     const [lo, hi] = [Math.min(...minutes), Math.max(...minutes)];
     const totalChars = days.reduce((s, d) => s + d.chars, 0);
     const chapters = selectionToChapters(planSelection()).length;
     const parallel = state.mode !== 'sequential';
+    // 이미 시작한 기간이면: 오늘 전 날짜의 분량은 읽은 기록이 이어지거나 밀린 읽기가 된다.
+    const carry = carrySummary();
+    const lastPast = addDays(start, carry.pastDays - 1);
+    const carryNotice =
+      carry.pastDays && (carry.keptDays || carry.missedDays)
+        ? html`<div class="notice carry-notice">
+            <p><b>${carry.pastDays === 1 ? formatDate(start) : `${formatDate(start)} – ${formatDate(lastPast)}`}</b>은 이미 지난 날짜입니다.</p>
+            <ul>
+              ${carry.keptDays ? html`<li><span class="carry is-kept">읽음</span>읽은 기록 ${carry.keptDays}일 치는 그대로 이어집니다.</li>` : ''}
+              ${carry.missedDays
+                ? html`<li><span class="carry is-missed">밀림</span>아직 안 읽은 분량(${missedText(carry)})은 밀린 읽기로 들어갑니다.
+                    저장한 뒤 오늘 화면에서 남은 기간에 고르게 다시 나눌 수 있습니다.</li>`
+                : ''}
+              ${carry.lostDays ? html`<li><span class="carry is-lost">지움</span>범위가 바뀐 ${carry.lostDays}일의 읽음 기록은 지워집니다.</li>` : ''}
+            </ul>
+          </div>`
+        : '';
+    /** 지난 날짜의 분량 옆 표시: 읽은 기록이 이어지면 "읽음", 아니면 "밀림" */
+    const carryMark = (date, segments) =>
+      compareDate(date, now) < 0
+        ? carry.isRead(date, segments)
+          ? html`<span class="carry is-kept">읽음</span>`
+          : html`<span class="carry is-missed">밀림</span>`
+        : '';
     setHTML(
       root,
       html`<header class="page-head month-head">
@@ -478,18 +576,19 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
               })}
             </ul>`
           : ''}
+        ${carryNotice}
         <label class="field">
           <span>계획 이름</span>
           <input id="plan-title" value="${state.title}" maxlength="40" autocomplete="off" />
         </label>
         ${dayList(
           days,
-          (d) => html`<li class="day-row ${d.parts.length ? '' : 'is-rest'}">
+          (d) => html`<li class="day-row ${d.parts.length ? '' : 'is-rest'} ${compareDate(d.date, now) < 0 ? 'is-past' : ''}">
             <span class="day-link">
               ${dayDate(d.date)}
               <span class="day-ref">${d.parts.length
-                ? d.parts.map((p) => html`<span class="ref-line">${formatSegments(p.segments)}</span>`)
-                : '쉬는 날'}</span>
+                ? d.parts.map((p) => html`<span class="ref-line">${formatSegments(p.segments)}${carryMark(d.date, p.segments)}</span>`)
+                : d.moved ? '분량을 뒤로 옮김' : '쉬는 날'}</span>
               ${d.parts.length ? html`<span class="day-min">${readingMinutes(d.chars)}분</span>` : ''}
             </span>
           </li>`,
@@ -558,15 +657,20 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
   const save = async () => {
     const { start, end } = period();
     const overlaps = plansOverlapping(start, end);
+    const same = overlaps.length === 1 && sameDate(overlaps[0].start, start) && sameDate(overlaps[0].end, end);
+    const carry = carrySummary();
     if (overlaps.length) {
-      const same = overlaps.length === 1 && sameDate(overlaps[0].start, start) && sameDate(overlaps[0].end, end);
+      const what = overlaps.map((p) => `"${p.title}"${same ? '' : `(${periodLabel(p)})`}`).join(', ');
+      const results = [
+        carry.keptDays && `읽은 기록 ${carry.keptDays}일 치는 그대로 이어집니다.`,
+        carry.missedDays && `안 읽은 지난 분량(${missedText(carry)})은 밀린 읽기로 들어갑니다.`,
+        carry.lostDays && `범위가 바뀐 ${carry.lostDays}일의 읽음 기록은 지워집니다.`,
+      ].filter(Boolean);
       const ok = await confirmDialog({
         title: same && state.period === 'month' ? `${state.m}월 계획을 바꿀까요?` : '계획을 바꿀까요?',
-        message: `기존 ${overlaps
-          .map((p) => `"${p.title}"${same ? '' : `(${periodLabel(p)})`}`)
-          .join(', ')} 계획과 읽음 기록이 지워집니다.`,
+        message: `${same ? `${what} 계획을 고친 범위로 바꿉니다.` : `기존 ${what} 계획은 지워집니다.`} ${results.join(' ')}`,
         confirmText: '바꾸기',
-        danger: true,
+        danger: !same || carry.lostDays > 0,
       });
       if (!ok) return;
     }
@@ -602,7 +706,12 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     }));
     // 이번 계획에 필요한 책을 미리 받아 두면 오프라인에서도 읽을 수 있다.
     Promise.all(Object.keys(sel).map(loadBook)).catch(() => {});
-    toast(`${isWholeMonth(start, end) ? `${start.m}월` : formatPeriod(start, end)} 계획을 만들었습니다`);
+    const label = isWholeMonth(start, end) ? `${start.m}월` : formatPeriod(start, end);
+    toast(
+      same
+        ? `${label} 계획을 바꿨습니다${carry.missedDays ? ` · 밀린 읽기 ${carry.missedDays}일` : ''}`
+        : `${label} 계획을 만들었습니다`,
+    );
     const running = compareDate(start, now) <= 0 && compareDate(now, end) <= 0;
     location.hash = running ? '#/' : `#/month/${ymKey(start.y, start.m)}`;
   };
@@ -672,6 +781,7 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
       } else {
         state.tracks = [{ title: '', days: buildPlan(getIndex(), chapters, days, opts) }];
       }
+      keepUnchangedTracks();
       if (!state.titleEdited) {
         const names = state.tracks.map((t) => t.title);
         state.title =
@@ -764,6 +874,11 @@ function groupsOfPlan(plan) {
     }
     return map;
   });
+}
+
+/** 묶음의 날짜별 분량에 든 장들의 열쇠 ("gen:1,gen:2,…"). 범위를 바꾸지 않은 묶음을 알아보는 데 쓴다 */
+function chapterSetKey(days) {
+  return [...new Set(days.flatMap((d) => d.segments.map((s) => `${s.b}:${s.c}`)))].sort().join(',');
 }
 
 /** 장 목록을 세는 단위: 한 책뿐이면 그 책의 단위(시편은 편), 아니면 장 */

@@ -16,6 +16,10 @@ import {
 import { currentAccount, listAccounts, listPlans, planOn, plansOverlapping, rebalancePlan } from '../db.js';
 import { confirmDialog, html, setHTML, formatNumber, toast } from '../ui.js';
 import { track } from '../analytics.js';
+import { openStatSheet } from './stats.js';
+
+// 진행 상황 칸을 누를 수 있다는 표시
+const moreIcon = html`<svg class="stat-more" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>`;
 import {
   accountChip,
   accountStatus,
@@ -132,6 +136,7 @@ export async function todayView(root) {
     const missed = plan.days.filter((d) => d.day < entry.day && d.segments.length && !d.readAt);
     const upcoming = plan.days.filter((d) => d.day > entry.day && d.segments.length).slice(0, 3);
     const when = formatDate(now);
+    const progressLabel = isMonthPlan(plan) ? `${plan.start.m}월 진행` : '계획 진행';
 
     let todayCard;
     if (!entry.segments.length) {
@@ -190,10 +195,16 @@ export async function todayView(root) {
       root,
       html`${head}
         ${todayCard}
-        <section class="stats" aria-label="진행 상황">
-          <div class="stat"><b>${progress.done}<small>/${progress.total}일</small></b><span>읽은 날</span></div>
-          <div class="stat"><b>${streak}<small>일</small></b><span>연속 읽기</span></div>
-          <div class="stat"><b>${progress.percent}<small>%</small></b><span>${isMonthPlan(plan) ? `${plan.start.m}월 진행` : '계획 진행'}</span></div>
+        <section class="stats" aria-label="진행 상황 (누르면 자세히 봅니다)">
+          <button class="stat" data-stat="days" aria-label="읽은 날 ${progress.done}/${progress.total}일, 자세히 보기">
+            ${moreIcon}<b>${progress.done}<small>/${progress.total}일</small></b><span>읽은 날</span>
+          </button>
+          <button class="stat" data-stat="streak" aria-label="연속 읽기 ${streak}일, 자세히 보기">
+            ${moreIcon}<b>${streak}<small>일</small></b><span>연속 읽기</span>
+          </button>
+          <button class="stat" data-stat="progress" aria-label="${progressLabel} ${progress.percent}%, 자세히 보기">
+            ${moreIcon}<b>${progress.percent}<small>%</small></b><span>${progressLabel}</span>
+          </button>
         </section>
         <div class="progress" role="progressbar" aria-valuenow="${progress.percent}" aria-valuemin="0" aria-valuemax="100">
           <span style="width:${progress.percent}%"></span>
@@ -201,9 +212,9 @@ export async function todayView(root) {
         ${isParallel(plan) ? progressSection(plan) : ''}
         ${othersBlock}
         ${missed.length
-          ? html`<section class="block">
+          ? html`<section class="block" id="missed">
               <h2 class="block-title">밀린 읽기 <span class="badge">${missed.length}</span></h2>
-              ${dayList(missed, (d) => dayRow(plan, d, now))}
+              ${dayList(missed, (d) => dayRow(plan, d, now, { remaining: true }))}
               <div class="rebalance">
                 <p>밀린 분량을 오늘부터 ${formatDate(plan.end)}까지 남은 날에 고르게 다시 나눌 수 있습니다.</p>
                 <button class="btn btn-ghost btn-sm" data-action="rebalance">남은 기간에 다시 나누기</button>
@@ -264,6 +275,8 @@ export async function todayView(root) {
   const onToggle = root.onclick;
   root.onclick = (e) => {
     if (e.target.closest('[data-action="rebalance"]')) return rebalance();
+    const stat = e.target.closest('[data-stat]');
+    if (stat) return openStatSheet(stat.dataset.stat);
     return onToggle(e);
   };
   render();

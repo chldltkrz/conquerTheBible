@@ -190,19 +190,28 @@ export function dayList(entries, row, cls = '') {
   </ul>`;
 }
 
-/** 날짜별 분량 한 줄: 날짜 · 범위 · 분 · 읽음 버튼 */
-export function dayRow(plan, entry, now) {
+/**
+ * 날짜별 분량 한 줄: 날짜 · 범위 · 분 · 읽음 버튼.
+ * remaining이면 일부만 읽은 날은 남은 분량만 보여 주고 읽은 책(그룹)을 적는다 (밀린 읽기 목록용).
+ */
+export function dayRow(plan, entry, now, { remaining = false } = {}) {
   const { date } = entry;
   const rest = entry.segments.length === 0;
   const cmp = compareDate(date, now);
   const state = entry.readAt ? 'read' : rest ? 'rest' : cmp < 0 ? 'missed' : cmp === 0 ? 'today' : 'upcoming';
   const partial = !entry.readAt && entry.readParts > 0;
+  const left = remaining && partial ? entry.parts.filter((p) => !p.readAt) : entry.parts;
+  const note = !partial
+    ? ''
+    : remaining
+      ? `${entry.parts.filter((p) => p.readAt).map((p) => p.title).join(', ')} 읽음`
+      : `${entry.readParts}/${entry.parts.length}${partUnit(plan)} 읽음`;
   const content = html`${dayDate(date)}
     <span class="day-ref">
-      ${rest ? (entry.moved ? '분량을 뒤로 옮김' : '쉬는 날') : formatSegments(entry.segments)}
-      ${partial ? html`<small class="partial-note">${entry.readParts}/${entry.parts.length}${partUnit(plan)} 읽음</small>` : ''}
+      ${rest ? (entry.moved ? '분량을 뒤로 옮김' : '쉬는 날') : formatSegments(left.flatMap((p) => p.segments))}
+      ${note ? html`<small class="partial-note">${note}</small>` : ''}
     </span>
-    ${rest ? '' : html`<span class="day-min">${readingMinutes(entry.chars)}분</span>`}`;
+    ${rest ? '' : html`<span class="day-min">${readingMinutes(left.reduce((s, p) => s + p.chars, 0))}분</span>`}`;
   // 쉬는 날은 열 본문이 없으므로 링크로 만들지 않는다. (href="#"이면 눌렀을 때 오늘 화면으로 넘어간다)
   return html`<li class="day-row is-${state} ${entry.moved ? 'is-moved' : ''}">
     ${rest ? html`<span class="day-link">${content}</span>` : html`<a class="day-link" href="${readHref(date)}">${content}</a>`}
@@ -251,12 +260,7 @@ export function bindReadToggles(root, onChange, surface) {
  * 다시 나누기로 분량을 뒤로 옮긴 날(못 읽은 날)에서 끊긴다.
  */
 export function readingStreak(now) {
-  const read = new Set(readDates().map(toISO));
-  const due = new Set(scheduledDates().map(toISO));
-  const moved = new Set(movedDates().map(toISO));
-  const periods = listPlans().map((p) => [toISO(p.start), toISO(p.end)]);
-  const planned = (iso) => periods.some(([s, e]) => s <= iso && iso <= e);
-
+  const { read, due, moved, planned } = streakSets();
   let streak = 0;
   let date = due.has(toISO(now)) && !read.has(toISO(now)) ? addDays(now, -1) : now;
   for (let i = 0; i < 4000; i++) {
@@ -271,6 +275,58 @@ export function readingStreak(now) {
   return streak;
 }
 
+/** 연속 읽기를 세는 데 쓰는 날짜들 (ISO 문자열) */
+function streakSets() {
+  const plans = listPlans();
+  const periods = plans.map((p) => [toISO(p.start), toISO(p.end)]);
+  return {
+    read: new Set(readDates().map(toISO)), // 모든 분량을 다 읽은 날
+    due: new Set(scheduledDates().map(toISO)), // 분량이 있는 날
+    moved: new Set(movedDates().map(toISO)), // 다시 나누기로 분량을 뒤로 옮긴 날 (못 읽은 날)
+    planned: (iso) => periods.some(([s, e]) => s <= iso && iso <= e),
+    firstStart: plans.map((p) => p.start).sort(compareDate)[0] ?? null,
+  };
+}
+
+/**
+ * 연속 읽기 자세히 (readingStreak과 같은 규칙).
+ *   current 지금 기록, best 최고 기록, total 다 읽은 날 모두, dueToday 오늘 분량이 있는지, readToday 오늘 다 읽었는지
+ *   recent: 이번 주 토요일까지 5주 [{date, state}]
+ *     state: 'read' 다 읽음 | 'missed' 못 읽음 | 'today' 오늘(아직) | 'moved' 분량을 옮긴 날 | 'rest' 쉬는 날 | 'off' 계획 없음 | 'future'
+ */
+export function streakStats(now = today()) {
+  const { read, due, moved, planned, firstStart } = streakSets();
+  const current = readingStreak(now);
+  // 최고 기록: 가장 이른 계획의 시작일부터 오늘까지 앞으로 세어 간다.
+  let best = current;
+  let run = 0;
+  for (let date = firstStart, i = 0; date && compareDate(date, now) <= 0 && i < 4000; date = addDays(date, 1), i++) {
+    const k = toISO(date);
+    if (!planned(k) || moved.has(k)) run = 0;
+    else if (due.has(k) && read.has(k)) best = Math.max(best, ++run);
+    else if (due.has(k) && compareDate(date, now) < 0) run = 0;
+  }
+  const end = addDays(now, 6 - weekday(now.y, now.m, now.d));
+  const recent = Array.from({ length: 35 }, (_, i) => {
+    const date = addDays(end, i - 34);
+    const k = toISO(date);
+    const cmp = compareDate(date, now);
+    let state;
+    if (read.has(k)) state = 'read';
+    else if (cmp > 0) state = 'future';
+    else if (moved.has(k)) state = 'moved';
+    else if (!planned(k)) state = 'off';
+    else if (!due.has(k)) state = 'rest';
+    else state = cmp === 0 ? 'today' : 'missed';
+    return { date, state };
+  });
+  const iso = toISO(now);
+  return { current, best, total: read.size, dueToday: due.has(iso), readToday: read.has(iso), recent };
+}
+
+/** 연속 읽기 목표 (사용 통계의 streak_milestone과 자세히 보기의 다음 목표) */
+export const STREAK_MILESTONES = [3, 7, 14, 21, 30, 50, 100, 200, 365];
+
 /** 진행 상황: 다 읽은 날 수와, 읽은 분량(병렬이면 책마다 읽은 것까지)의 비율 */
 export function progressOf(plan) {
   const reading = plan.days.filter((d) => d.segments.length);
@@ -281,6 +337,7 @@ export function progressOf(plan) {
   return {
     total: reading.length,
     done: reading.filter((d) => d.readAt).length,
+    readChars,
     percent: plan.totalChars ? Math.round((readChars / plan.totalChars) * 100) : 0,
   };
 }
@@ -339,7 +396,7 @@ export function trackProgress(plan) {
 }
 
 /** 진도 막대 목록 @param {Array<{name, done, total, unit}>} items */
-function progressList(items) {
+export function progressList(items) {
   return html`<ul class="book-progress">
     ${items.map((p) => {
       const pct = Math.round((p.done / p.total) * 100);
@@ -353,21 +410,20 @@ function progressList(items) {
   </ul>`;
 }
 
+/** 진도 항목: 그룹으로 읽기는 그룹별, 그 밖에는 책별 {title, items: [{name, done, total, unit}]} */
+export function progressItems(plan) {
+  return plan.mode === 'group'
+    ? { title: '그룹별 진도', items: trackProgress(plan).map((p) => ({ ...p, name: p.title })) }
+    : { title: '책별 진도', items: bookProgress(plan).map((p) => ({ ...p, name: book(p.b).name, unit: chapterUnit(p.b) })) };
+}
+
 /**
  * 진도 구역: 그룹으로 읽기는 그룹별, 그 밖에는 책이 둘 이상일 때 책별 진도. 보여 줄 것이 없으면 빈 문자열.
  * titleSuffix는 한 화면에 계획이 여럿일 때 제목 뒤에 붙인다.
  */
 export function progressSection(plan, titleSuffix = '') {
-  let title;
-  let items;
-  if (plan.mode === 'group') {
-    title = '그룹별 진도';
-    items = trackProgress(plan).map((p) => ({ ...p, name: p.title }));
-  } else {
-    title = '책별 진도';
-    items = bookProgress(plan).map((p) => ({ ...p, name: book(p.b).name, unit: chapterUnit(p.b) }));
-    if (items.length < 2) return '';
-  }
+  const { title, items } = progressItems(plan);
+  if (plan.mode !== 'group' && items.length < 2) return '';
   return html`<section class="block">
     <h2 class="block-title">${title}${titleSuffix}</h2>
     ${progressList(items)}
@@ -424,8 +480,6 @@ export function verseTabs(active) {
 }
 
 // ── 사용 통계용 속성 ───────────────────────────────────────
-
-const STREAK_MILESTONES = [3, 7, 14, 21, 30, 50, 100, 200, 365];
 
 /** 읽음 이벤트 공통 속성. trackNo를 주면 그 묶음만 본다. */
 export function readingEventProps(plan, day, trackNo = null) {
