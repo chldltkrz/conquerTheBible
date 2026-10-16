@@ -1744,11 +1744,32 @@ button.stat:active {
   width: min(92vw, 420px);
 }
 
+/* 계정이 많아도 제목·새 계정·닫기는 늘 보이고, 계정 목록만 스크롤한다 */
+.account-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+}
+
+.account-dialog[open] > :not(.account-list) {
+  flex-shrink: 0;
+}
+
+.account-dialog .account-list {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 12px -2px 0;
+  padding: 2px;
+}
+
 .account-list {
   list-style: none;
   margin: 14px 0 0;
   padding: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr); /* 긴 상태 문구가 줄을 창 밖으로 밀어내지 않게 */
   gap: 8px;
 }
 
@@ -1791,6 +1812,11 @@ button.stat:active {
 .account-text small {
   color: var(--muted);
   font-size: 13px;
+  line-height: 1.45;
+  /* 오늘 읽을 곳이 길면(여러 권 동시에) 자르지 않고 다음 줄로 넘긴다 */
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 
 .account-text small.is-read {

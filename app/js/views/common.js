@@ -92,7 +92,8 @@ export function accountStatus(accountId, now = today()) {
   if (entry.readParts) {
     return { text: `${plan.title} · 오늘 ${entry.readParts}/${entry.parts.length}${partUnit(plan)} 읽음`, state: 'todo' };
   }
-  return { text: `${plan.title} · 오늘 ${formatSegments(entry.segments, { short: true })}`, state: 'todo' };
+  // 책 이름을 줄이지 않는다 ("행 15–21"은 잘린 글처럼 보인다)
+  return { text: `${plan.title} · 오늘 ${formatSegments(entry.segments)}`, state: 'todo' };
 }
 
 // 읽는 방식: 'sequential' 이어서 읽기(묶음 하나) | 'parallel' 책마다 묶음 | 'group' 사용자가 묶은 그룹마다 묶음
