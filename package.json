@@ -12,12 +12,14 @@
     "icons": "node scripts/make-icons.mjs",
     "vendor": "node scripts/vendor.mjs",
     "postinstall": "node scripts/vendor.mjs",
-    "backgrounds": "node scripts/backgrounds.mjs"
+    "backgrounds": "node scripts/backgrounds.mjs",
+    "manual": "node scripts/manual.mjs"
   },
   "engines": {
     "node": ">=20"
   },
   "devDependencies": {
+    "playwright": "1.56.1",
     "posthog-js": "^1.438.2",
     "qrcode-generator": "^2.0.4",
     "sql.js": "^1.14.2"

@@ -64,8 +64,8 @@
   다 읽은 날과 읽을 분량이 없는 날(계획 없음, 쉬는 날)에는 보내지 않습니다. 켜고 끈 것과 시각은 기기마다 따로 둡니다.
   아이폰·아이패드는 홈 화면에 추가한 앱(iOS 16.4 이상)에서 켤 수 있습니다. 자세한 것은 아래 [읽기 알림](#읽기-알림).
 
-사용자용 설명서(실제 화면 사진과 메뉴별 사용법, 기기 간 동기화 포함, PDF 31쪽)는 [app/docs/user-manual.pdf](app/docs/user-manual.pdf)에 있고,
-앱의 **설정 > 사용설명서**에서 바로 열 수 있습니다.
+사용자용 설명서(실제 화면 사진과 메뉴별 사용법, PDF 34쪽)는 [app/docs/user-manual.pdf](app/docs/user-manual.pdf)에 있고,
+앱의 **설정 > 사용설명서**에서 바로 열 수 있습니다. 만드는 법은 아래 [사용설명서 만들기](#사용설명서-만들기).
 
 ## 시작하기
 
@@ -162,6 +162,26 @@ set -a; . /etc/conquer-the-bible/sync.env; set +a; npm test
 계정·계획·저장한 구절의 번호는 기기마다 따로 만들어도 겹치지 않도록 무작위(2^32 이상 2^53 미만)로 정합니다.
 예전 자동 번호(1, 2, …)는 그 기기 기록으로 동기화를 시작할 때 무작위 번호로 바꿉니다.
 
+## 사용설명서 만들기
+
+설명서 글은 `docs/manual/manual.html`(꾸밈은 `manual.css`)에 있고, `npm run manual`이 화면 사진을 새로 찍어 PDF로 만듭니다.
+
+```sh
+npx playwright install chromium      # 처음 한 번 (헤드리스 크롬)
+npm run manual                       # 화면 52장을 찍고 app/docs/user-manual.pdf를 만든다 (몇 분)
+npm run manual -- --only card,export # 그 화면만 다시 찍고 PDF
+npm run manual -- --pdf              # 글만 고쳤으면 찍어 둔 화면으로 PDF만
+```
+
+- **예시 기록** (`scripts/lib/manual-demo.mjs`): 앱의 `db.js`로 계정 셋(나·엄마·하은), 계획 셋(한 권씩·여러 권 동시에·그룹별), 읽음 기록,
+  저장한 구절, 묵상 메모, 올해의 말씀을 만들어 앱의 "가져오기"와 같은 방식으로 넣습니다. 오늘은 2026년 10월 17일로 정해 두고 브라우저의 시각도
+  그날로 고정하므로, 다시 만들어도 같은 화면이 나옵니다.
+- **화면 찍기** (`scripts/manual.mjs`, `scripts/lib/manual-env.mjs`): app/를 임시 서버로 띄우고(운영 동기화 서버에 닿지 않도록 `/api/`는 가짜로
+  답한다), 휴대폰 크기(390×844)의 크롬으로 화면마다 정해 둔 동작을 한 뒤 설명할 곳에 빨간 테두리와 번호를 얹어 찍습니다. 사진은
+  `.cache/manual/shots/`에 둡니다. 헤드리스 크롬에 없는 휴대폰 공유 창·알림 허용·한국어 음성은 흉내 냅니다.
+- 화면 사진의 번호 순서(`SHOT_LIST`의 `marks`)와 글의 번호 목록(`ol.marks`) 순서가 짝이 맞아야 합니다. 새 화면을 넣으려면 `SHOT_LIST`에
+  하나 더하고 글에 `<img src="shots/이름.jpg">`를 넣습니다. 찾지 못한 곳이 있으면 그 화면을 `*.failed.jpg`로 남기고 멈춥니다.
+
 ## 기기 간 동기화
 
 로그인 대신 **동기화 코드**가 열쇠입니다. 코드를 아는 기기는 모두 같은 기록을 보고 고칩니다.
@@ -256,7 +276,7 @@ app/                  배포할 정적 사이트 (PWA)
   data/               크롤링한 새번역 본문 (index.json + books/*.json)
   data/bsb/books/     BSB 본문 (책마다 JSON, 형식은 새번역과 같다)
   img/cards/          말씀 카드 배경 그림 (1080×1920 WebP, thumb/ 작은 그림, index.json 주제 목록)
-  docs/user-manual.pdf 사용설명서 (설정 화면에서 연다)
+  docs/user-manual.pdf 사용설명서 (설정 화면에서 연다, npm run manual로 만든다)
 server/
   sync-server.mjs     기기 간 동기화 서버 (PostgreSQL)
   push.mjs            읽기 알림: 구독 받기, 시각에 맞춰 웹 푸시 보내기
@@ -267,6 +287,8 @@ scripts/
   bsb.mjs             BSB 받아서 JSON 만들기, lib/usfm.mjs 변환기
   backgrounds.mjs     말씀 카드 배경 그림 만들기 (이미지 AI)
   serve.mjs           개발용 정적 서버
+  manual.mjs          사용설명서 PDF 만들기 (화면 찍기, lib/manual-demo.mjs 예시 기록, lib/manual-env.mjs 브라우저)
+docs/manual/          사용설명서 글(manual.html)과 꾸밈(manual.css)
 test/                 node:test 테스트
 ```
 
