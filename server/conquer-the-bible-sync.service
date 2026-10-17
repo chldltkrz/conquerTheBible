@@ -1,4 +1,4 @@
-# 한 달 성경 읽기 — 기기 간 동기화 서버 (README의 "배포" 참고)
+# 맛있는만나 — 기기 간 동기화 서버 (README의 "배포" 참고)
 #   설치: cp server/conquer-the-bible-sync.service /etc/systemd/system/
 #         systemctl daemon-reload && systemctl enable --now conquer-the-bible-sync
 #   로그: journalctl -u conquer-the-bible-sync

@@ -1,7 +1,8 @@
 {
-  "name": "한 달 성경 읽기",
-  "short_name": "성경 읽기",
-  "description": "고른 성경 범위를 한 달 동안 날마다 고르게 나누어 읽습니다. 새번역.",
+  "name": "맛있는만나",
+  "short_name": "맛있는만나",
+  "description": "고른 성경 범위를 정한 기간 동안 날마다 고르게 나누어 읽는 성경 통독 계획. 새번역.",
+  "categories": ["books", "education", "lifestyle"],
   "lang": "ko",
   "id": "./",
   "start_url": "./",

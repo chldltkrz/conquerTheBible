@@ -1,4 +1,4 @@
-# 한 달 성경 읽기
+# 맛있는만나 (delicious manna)
 
 읽고 싶은 성경 범위(장)를 고르면, 그 달 1일부터 말일까지 날마다 비슷한 분량으로 나누어 주는 PWA입니다.
 기간은 기본이 한 달이고, "40일", "100일", "1년"처럼 시작일과 마지막 날을 직접 정할 수도 있습니다.
@@ -72,7 +72,7 @@ DATABASE_URL=postgres://사용자:암호@127.0.0.1:5432/DB이름 node server/syn
 
 ```sh
 npm test         # 분배 알고리즘·파서·동기화 테스트
-npm run icons    # 앱 아이콘 다시 그리기
+npm run icons    # 앱 아이콘, 링크 미리보기 그림(og-image.png), favicon.ico 다시 그리기
 ```
 
 동기화 테스트 중 서버와 주고받는 것은 `TEST_DATABASE_URL`(운영과 다른 PostgreSQL DB, 테스트마다 비운다)이
@@ -174,6 +174,7 @@ set -a; . /etc/conquer-the-bible/sync.env; set +a; npm test
 ```
 app/                  배포할 정적 사이트 (PWA)
   index.html, sw.js, manifest.webmanifest
+  robots.txt, sitemap.xml, favicon.ico   검색 로봇용
   js/planner.js       분량 나누기 (DOM 없는 순수 모듈)
   js/db.js            SQLite 스키마와 질의, 동기화할 줄 모으기·받은 줄 넣기
   js/sync.js          기기 간 동기화: 서버와 주고받기, 언제 할지
@@ -189,6 +190,21 @@ scripts/
   serve.mjs           개발용 정적 서버
 test/                 node:test 테스트
 ```
+
+## 검색 노출(SEO)과 링크 미리보기
+
+- `app/index.html`의 `<head>`에 제목·설명, 대표 주소(canonical), 링크 미리보기(Open Graph·X 카드),
+  구조화 데이터(JSON-LD: `WebSite`, `WebApplication`)가 있습니다. 구조화 데이터의 `name`/`alternateName`으로
+  검색 결과에 사이트 이름이 "맛있는만나"로 나오게 합니다.
+- 앱이 뜨기 전 화면(`<main>` 안의 `.boot`)과 `<noscript>`에 앱 이름과 소개가 들어 있어,
+  자바스크립트를 실행하지 않는 검색 로봇도 내용을 읽습니다.
+- `app/robots.txt`는 `/api/`만 막고 `sitemap.xml`을 알려 줍니다. 화면을 그리는 데 필요한 `js/`, `data/`, `vendor/`는 막지 않습니다.
+- 링크 미리보기 그림(`icons/og-image.png`, 1200×630)과 `favicon.ico`는 `npm run icons`로 만듭니다.
+- 주소 `https://delicious-manna.com/`이 `index.html`(canonical, og:url, og:image, JSON-LD), `robots.txt`, `sitemap.xml`에
+  적혀 있으므로 도메인을 바꾸면 함께 고칩니다.
+- 검색 등록: [Google Search Console](https://search.google.com/search-console)과
+  [네이버 서치어드바이저](https://searchadvisor.naver.com)에 사이트를 등록하고 `sitemap.xml`을 제출합니다.
+  소유 확인용 메타 태그(`google-site-verification`, `naver-site-verification`)를 받으면 `index.html`의 `<head>`에 넣습니다.
 
 ## 배포
 

@@ -3,23 +3,93 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>한 달 성경 읽기</title>
-    <meta name="description" content="고른 성경 범위를 한 달(또는 직접 정한 기간) 동안 날마다 고르게 나누어 읽습니다. 새번역." />
+    <title>맛있는만나 – 날마다 고르게 나누어 읽는 성경 통독 계획</title>
+    <meta name="description" content="읽고 싶은 성경 범위와 기간을 고르면 날마다 비슷한 분량으로 나누어 주는 성경 읽기 앱입니다. 한 달·40일·1년 1독 통독표, 새번역 본문, 읽음 기록, 구절 저장과 묵상 메모, 소리로 듣기를 회원가입 없이 무료로 씁니다." />
+    <meta name="application-name" content="맛있는만나" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="canonical" href="https://delicious-manna.com/" />
+
+    <!-- 링크 미리보기 (카카오톡·페이스북·X 등). 주소는 절대 경로여야 한다. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="맛있는만나" />
+    <meta property="og:locale" content="ko_KR" />
+    <meta property="og:url" content="https://delicious-manna.com/" />
+    <meta property="og:title" content="맛있는만나 – 날마다 고르게 나누어 읽는 성경 통독 계획" />
+    <meta property="og:description" content="고른 성경 범위를 정한 기간 동안 날마다 고르게 나누어 읽습니다. 한 달·1년 1독 통독표, 새번역 본문, 읽음 기록, 구절 저장, 소리로 듣기." />
+    <meta property="og:image" content="https://delicious-manna.com/icons/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="맛있는만나 – 펼친 성경과 책갈피" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="맛있는만나 – 날마다 고르게 나누어 읽는 성경 통독 계획" />
+    <meta name="twitter:description" content="고른 성경 범위를 정한 기간 동안 날마다 고르게 나누어 읽습니다. 한 달·1년 1독 통독표, 새번역 본문, 읽음 기록, 구절 저장, 소리로 듣기." />
+    <meta name="twitter:image" content="https://delicious-manna.com/icons/og-image.png" />
+
+    <!-- 검색 결과에 사이트 이름을 "맛있는만나"로 보여 주고, 무료 웹 앱임을 알린다. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://delicious-manna.com/#website",
+            "name": "맛있는만나",
+            "alternateName": ["delicious manna", "Delicious Manna"],
+            "url": "https://delicious-manna.com/",
+            "inLanguage": "ko-KR"
+          },
+          {
+            "@type": "WebApplication",
+            "@id": "https://delicious-manna.com/#app",
+            "name": "맛있는만나",
+            "alternateName": "delicious manna",
+            "url": "https://delicious-manna.com/",
+            "description": "읽고 싶은 성경 범위와 기간을 고르면 날마다 비슷한 분량으로 나누어 주는 성경 읽기 앱. 한 달·40일·1년 1독 통독표, 새번역 본문, 읽음 기록, 구절 저장과 묵상 메모, 소리로 듣기.",
+            "image": "https://delicious-manna.com/icons/og-image.png",
+            "applicationCategory": "LifestyleApplication",
+            "operatingSystem": "Any",
+            "browserRequirements": "Requires JavaScript",
+            "inLanguage": "ko-KR",
+            "isAccessibleForFree": true,
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "KRW" },
+            "isPartOf": { "@id": "https://delicious-manna.com/#website" }
+          }
+        ]
+      }
+    </script>
+
     <meta name="theme-color" content="#f6f3ec" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#141619" media="(prefers-color-scheme: dark)" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <meta name="apple-mobile-web-app-title" content="성경 읽기" />
+    <meta name="apple-mobile-web-app-title" content="맛있는만나" />
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
     <link rel="stylesheet" href="css/app.css" />
+    <noscript><style>.boot-msg { display: none; }</style></noscript>
     <script src="vendor/sql-wasm-browser.js" defer></script>
     <script type="module" src="js/main.js"></script>
   </head>
   <body class="booting">
+    <!-- 앱이 뜨기 전 잠깐 보이는 화면. 자바스크립트를 실행하지 않는 검색 로봇도 이 내용을 읽는다. -->
     <main id="main" tabindex="-1">
-      <p class="boot-msg">불러오는 중…</p>
+      <section class="boot">
+        <img class="boot-mark" src="icons/icon.svg" alt="" width="64" height="64" />
+        <h1>맛있는만나</h1>
+        <p class="boot-lead">고른 성경 범위를 정한 기간 동안 날마다 고르게 나누어 읽는 성경 통독 계획</p>
+        <p class="boot-msg">불러오는 중…</p>
+        <noscript>
+          <p>
+            읽고 싶은 성경 범위(장)와 기간(한 달, 40일, 100일, 1년)을 고르면 날마다 비슷한 분량으로 나누어 줍니다.
+            새번역 본문을 읽고 날마다 읽음 표시를 하며, 마음에 남는 구절을 저장하고 묵상 메모를 남깁니다.
+            소리로 듣기와 말씀 검색도 됩니다. 회원가입 없이 무료로 쓰며, 기록은 이 기기에 저장됩니다.
+          </p>
+          <p>맛있는만나를 쓰려면 브라우저에서 자바스크립트를 켜 주세요.</p>
+        </noscript>
+      </section>
     </main>
     <nav class="tabbar" aria-label="주 메뉴">
       <a href="#/" data-tab="today">

@@ -124,10 +124,31 @@ code {
   color: var(--muted);
 }
 
+/* 앱이 뜨기 전 화면 (index.html) */
+.boot {
+  text-align: center;
+  margin-top: 22vh;
+}
+
+.boot-mark {
+  display: block;
+  margin: 0 auto 14px;
+  border-radius: 16px;
+}
+
+.boot h1 {
+  margin: 0 0 6px;
+}
+
+.boot-lead,
+.boot noscript p {
+  color: var(--muted);
+  max-width: 30em;
+  margin: 0 auto 18px;
+}
+
 .boot-msg {
   color: var(--muted);
-  text-align: center;
-  margin-top: 30vh;
 }
 
 :focus-visible {

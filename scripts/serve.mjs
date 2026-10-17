@@ -23,6 +23,8 @@ const TYPES = {
   '.svg': 'image/svg+xml',
   '.txt': 'text/plain; charset=utf-8',
   '.pdf': 'application/pdf',
+  '.ico': 'image/x-icon',
+  '.xml': 'application/xml; charset=utf-8',
 };
 
 function proxyToSync(req, res) {

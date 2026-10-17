@@ -263,7 +263,7 @@ export function showShareDialog(code, { fresh = false } = {}) {
       toast((await copyText(link)) ? '링크를 복사했습니다' : '복사하지 못했습니다');
     } else if (e.target.closest('[data-share]')) {
       // 나에게 보내기(카카오톡 등)로 다른 기기에서 열 수 있게
-      navigator.share({ title: '성경 읽기 동기화', url: link }).catch(() => {});
+      navigator.share({ title: '맛있는만나 동기화', url: link }).catch(() => {});
     }
   });
   dlg.addEventListener('close', () => dlg.remove());

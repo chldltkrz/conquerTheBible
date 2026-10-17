@@ -55,18 +55,22 @@ function sample(p) {
   return [...hex(COLORS.bg), 255];
 }
 
-/** scale: 도형을 가운데 기준으로 줄이는 비율 (maskable 아이콘의 안전 영역용) */
-function render(size, { rounded, scale = 1 }) {
+/**
+ * scale: 도형을 가운데 기준으로 줄이는 비율 (maskable 아이콘의 안전 영역용)
+ * width: 가로가 더 긴 그림(공유 미리보기)이면 가로 픽셀 수. 도형은 높이(size)에 맞춰 가운데에 그린다.
+ */
+function render(size, { rounded, scale = 1, width = size }) {
   const SS = 4;
-  const rgba = Buffer.alloc(size * size * 4);
+  const rgba = Buffer.alloc(width * size * 4);
+  const cx = width / size / 2;
   for (let py = 0; py < size; py++) {
-    for (let px = 0; px < size; px++) {
+    for (let px = 0; px < width; px++) {
       const acc = [0, 0, 0, 0];
       for (let sy = 0; sy < SS; sy++) {
         for (let sx = 0; sx < SS; sx++) {
           const x = (px + (sx + 0.5) / SS) / size;
           const y = (py + (sy + 0.5) / SS) / size;
-          const shapeP = [0.5 + (x - 0.5) / scale, 0.5 + (y - 0.5) / scale];
+          const shapeP = [0.5 + (x - cx) / scale, 0.5 + (y - 0.5) / scale];
           let c = sample(shapeP);
           if (rounded && !inRoundRect([x, y], 0.22)) c = [0, 0, 0, 0];
           // 미리 곱한 알파로 더해 가장자리 색이 번지지 않게 한다.
@@ -76,7 +80,7 @@ function render(size, { rounded, scale = 1 }) {
           acc[3] += c[3];
         }
       }
-      const i = (py * size + px) * 4;
+      const i = (py * width + px) * 4;
       const a = acc[3] / (SS * SS);
       rgba[i] = a ? Math.round(acc[0] / acc[3]) : 0;
       rgba[i + 1] = a ? Math.round(acc[1] / acc[3]) : 0;
@@ -84,7 +88,21 @@ function render(size, { rounded, scale = 1 }) {
       rgba[i + 3] = Math.round(a);
     }
   }
-  return encodePng(size, size, rgba);
+  return encodePng(width, size, rgba);
+}
+
+/** PNG 한 장을 담은 .ico (브라우저와 검색 로봇이 /favicon.ico를 찾을 때 쓴다) */
+function ico(png, size) {
+  const head = Buffer.alloc(22);
+  head.writeUInt16LE(1, 2); // 종류: 아이콘
+  head.writeUInt16LE(1, 4); // 그림 수
+  head[6] = size;
+  head[7] = size;
+  head.writeUInt16LE(1, 10); // 색 평면
+  head.writeUInt16LE(32, 12); // 픽셀당 비트
+  head.writeUInt32LE(png.length, 14);
+  head.writeUInt32LE(22, 18); // 그림이 시작하는 위치
+  return Buffer.concat([head, png]);
 }
 
 // ── PNG ─────────────────────────────────────────────────
@@ -145,6 +163,9 @@ const files = {
   'maskable-512.png': render(512, { rounded: false, scale: 0.8 }),
   'apple-touch-icon.png': render(180, { rounded: false, scale: 0.9 }),
   'icon.svg': svg(),
+  // 카카오톡·페이스북·X 등에 링크를 붙였을 때 보이는 미리보기 그림 (index.html의 og:image)
+  'og-image.png': render(630, { rounded: false, width: 1200 }),
 };
 for (const [name, data] of Object.entries(files)) await fs.writeFile(path.join(OUT, name), data);
-console.log(`아이콘 ${Object.keys(files).length}개 → app/icons/`);
+await fs.writeFile(path.join(OUT, '..', 'favicon.ico'), ico(render(48, { rounded: true }), 48));
+console.log(`아이콘 ${Object.keys(files).length + 1}개 → app/icons/, app/favicon.ico`);
