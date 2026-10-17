@@ -1,4 +1,4 @@
-// 설정 화면: 읽기 화면, 오프라인 저장, 계획 기록, 백업
+// 설정 화면: 계정, 동기화, 읽기 알림, 읽기 화면, 오프라인 저장, 계획 기록, 백업
 
 import { TRANSLATIONS, allBooks, bookUrl } from '../bible.js';
 import { today, ymKey } from '../dates.js';
@@ -23,6 +23,7 @@ import { koreanVoices, pickVoice, player, RATES, voicesReady } from '../tts.js';
 import { rateLabel, speakerIcon } from './listen.js';
 import { isDevHostname, isOptedOut, setOptOut, track } from '../analytics.js';
 import { handleSyncAction, syncSection } from './syncsection.js';
+import { handleReminderAction, handleReminderChange, reminderSection } from './remindersection.js';
 
 /**
  * 개발자에게 커피 보내기: 송금 링크를 넣으면 설정 화면에 그 버튼이 생긴다. 주소가 빈 항목은 보이지 않는다.
@@ -113,6 +114,8 @@ export async function settingsView(root, _params, { isCurrent }) {
         </section>
 
         ${syncSection()}
+
+        ${reminderSection()}
 
         <section class="block">
           <h2 class="block-title">읽기 화면</h2>
@@ -327,6 +330,8 @@ export async function settingsView(root, _params, { isCurrent }) {
     const d = btn.dataset;
     if (d.syncAction) {
       await handleSyncAction(d.syncAction, btn, render);
+    } else if (d.reminderAction) {
+      await handleReminderAction(d.reminderAction, btn);
     } else if (d.readingMode) {
       await setSetting('translation', d.readingMode);
       render();
@@ -409,6 +414,8 @@ export async function settingsView(root, _params, { isCurrent }) {
   };
 
   root.onchange = async (e) => {
+    // 알림 켜기는 허용을 묻는 창을 띄우므로 무엇보다 먼저, 기다리지 않고 부른다
+    if (handleReminderChange(e.target, render)) return;
     if (e.target.id === 'analytics-opt-in') {
       setOptOut(!e.target.checked);
       toast(e.target.checked ? '사용 통계를 보냅니다' : '사용 통계를 보내지 않습니다');

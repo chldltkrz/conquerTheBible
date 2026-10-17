@@ -12,13 +12,17 @@
 //   POST   /api/sync          {v, cursor, replace?, changes: [{t, k, d}]} → {cursor, more, rows: [{t, k, d}]}
 //   GET    /api/sync/health   서버와 DB 확인
 //   (공간을 쓰는 요청은 Authorization: Bearer <동기화 코드>)
+//   /api/push/…               읽기 알림 (push.mjs)
 //
 // 실행: DATABASE_URL=postgres://… PORT=5690 node server/sync-server.mjs
+// 읽기 알림을 보내려면 VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY도 준다 (README "읽기 알림")
 
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import pg from 'pg';
+import { HttpError, readJson, send } from './http.mjs';
+import { PUSH_SCHEMA, createPushApi, createReminders, webPushSender } from './push.mjs';
 
 export const PROTOCOL = 1;
 
@@ -35,7 +39,6 @@ export const TABLES = new Set([
   'settings',
 ]);
 
-const MAX_BODY = 4 * 1024 * 1024; // 요청 하나 (nginx client_max_body_size와 맞춘다)
 const MAX_CHANGES = 10000; // 요청 하나에 보내는 줄 수
 const MAX_KEY = 200;
 const MAX_ROW = 256 * 1024; // 줄 하나의 JSON 길이 (긴 묵상 메모도 들어가도록)
@@ -89,52 +92,14 @@ const hashCode = (code) => crypto.createHash('sha256').update(code.replace(/-/g,
 
 // ── HTTP ───────────────────────────────────────────────────
 
-class HttpError extends Error {
-  constructor(status, code) {
-    super(code);
-    this.status = status;
-    this.code = code;
-  }
-}
-
-function send(res, status, body) {
-  const text = body == null ? '' : typeof body === 'string' ? body : JSON.stringify(body);
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(text),
-    'Cache-Control': 'no-store',
-    'X-Content-Type-Options': 'nosniff',
-  });
-  res.end(text);
-}
-
-function readJson(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    req.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > MAX_BODY) {
-        req.removeAllListeners('data');
-        req.resume();
-        reject(new HttpError(413, 'too_large'));
-      } else chunks.push(chunk);
-    });
-    req.on('end', () => {
-      if (size > MAX_BODY) return;
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'));
-      } catch {
-        reject(new HttpError(400, 'bad_json'));
-      }
-    });
-    req.on('error', reject);
-  });
+/** Authorization: Bearer <동기화 코드>. 없거나 맞지 않으면 null */
+function bearerCode(req) {
+  const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? '');
+  return (m && normalizeCode(m[1])) || null;
 }
 
 function codeFrom(req) {
-  const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? '');
-  const code = m && normalizeCode(m[1]);
+  const code = bearerCode(req);
   if (!code) throw new HttpError(401, 'no_code');
   return code;
 }
@@ -160,7 +125,16 @@ function parseChanges(list) {
 
 // ── 동기화 ─────────────────────────────────────────────────
 
-export function createHandler(pool) {
+/** 동기화 코드에 맞는 공간 번호. 코드가 없거나 맞지 않으면 null (읽기 알림이 같은 공간의 기기를 묶는 데 쓴다) */
+export async function spaceIdFor(pool, req) {
+  const code = bearerCode(req);
+  if (!code) return null;
+  const r = await pool.query('SELECT id FROM sync_spaces WHERE code_hash = $1', [hashCode(code)]);
+  return r.rows[0]?.id ?? null;
+}
+
+/** push: createPushApi()가 만든 읽기 알림 요청 처리기. 없으면 /api/push/…는 503 */
+export function createHandler(pool, { push = null } = {}) {
   async function createSpace() {
     for (let i = 0; i < 5; i++) {
       const code = newCode();
@@ -308,6 +282,10 @@ export function createHandler(pool) {
       } else if (route === 'GET /api/sync/health') {
         await pool.query('SELECT 1');
         send(res, 200, { ok: true });
+      } else if (pathname.startsWith('/api/push/')) {
+        if (!push) throw new HttpError(503, 'push_off');
+        const [status, body] = await push(route, req);
+        send(res, status, body);
       } else send(res, 404, { error: 'not_found' });
     } catch (err) {
       if (err instanceof HttpError) {
@@ -321,17 +299,30 @@ export function createHandler(pool) {
   };
 }
 
-/** 서버를 띄운다. 테스트에서는 port 0으로 빈 포트를 쓴다. */
-export async function startServer({ databaseUrl, port = 5690, host = '127.0.0.1' }) {
+/**
+ * 서버를 띄운다. 테스트에서는 port 0으로 빈 포트를 쓴다.
+ * push: 읽기 알림 {publicKey, sender, interval}. sender(구독, 내용, 옵션)가 실제로 보내고,
+ *       interval(ms)마다 보낼 알림을 찾는다(0이면 찾지 않는다: 테스트는 reminders.tick()을 직접 부른다).
+ */
+export async function startServer({ databaseUrl, port = 5690, host = '127.0.0.1', push = null }) {
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 10 });
   await pool.query(SCHEMA);
-  const server = http.createServer(createHandler(pool));
+  await pool.query(PUSH_SCHEMA);
+  const reminders = push && createReminders(pool, push.sender);
+  const pushApi =
+    push && createPushApi(pool, { ...push, spaceIdFor: (req) => spaceIdFor(pool, req), deliver: reminders.deliver });
+  const server = http.createServer(createHandler(pool, { push: pushApi }));
   await new Promise((resolve) => server.listen(port, host, resolve));
+  const tick = () => reminders.tick().catch((err) => console.error('읽기 알림 실패:', err.message));
+  const timer = push?.interval ? setInterval(tick, push.interval) : null;
   return {
     server,
     pool,
+    reminders,
     url: `http://${host}:${server.address().port}`,
     close: async () => {
+      clearInterval(timer);
+      await reminders?.idle();
       await new Promise((resolve) => server.close(resolve));
       await pool.end();
     },
@@ -343,12 +334,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.error('DATABASE_URL이 없습니다 (예: postgres://사용자:암호@127.0.0.1:5432/ctb_sync)');
     process.exit(1);
   }
+  const { VAPID_PUBLIC_KEY: publicKey, VAPID_PRIVATE_KEY: privateKey } = process.env;
+  const subject = process.env.VAPID_SUBJECT ?? 'https://delicious-manna.com';
   const app = await startServer({
     databaseUrl: process.env.DATABASE_URL,
     port: Number(process.env.PORT ?? 5690),
     host: process.env.HOST ?? '127.0.0.1',
+    push:
+      publicKey && privateKey
+        ? { publicKey, sender: webPushSender({ publicKey, privateKey, subject }), interval: 30 * 1000 }
+        : null,
   });
-  console.log(`동기화 서버: ${app.url}`);
+  console.log(`동기화 서버: ${app.url}${app.reminders ? '' : ' (VAPID 키가 없어 읽기 알림은 꺼 둠)'}`);
   const stop = () => app.close().then(() => process.exit(0));
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);

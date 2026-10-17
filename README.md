@@ -50,6 +50,10 @@
   다른 기기에서 "코드로 연결하기"에 코드를 넣거나 QR 코드(링크)로 열면 연결됩니다. 이 기기의 모든 계정
   (계획, 읽음 기록, 저장한 구절, 묵상 메모, 올해의 말씀)이 맞춰지고, 글자 크기·목소리·지금 계정은 기기마다 따로 둡니다.
   인터넷이 없을 때 바꾼 것은 다시 연결되면 보냅니다. 자세한 것은 아래 [기기 간 동기화](#기기-간-동기화).
+- **읽기 알림**: 설정 > 읽기 알림에서 켜면, 매일 정한 시각(기본 오후 9시, 바꿀 수 있음)에 오늘 분량을 아직 다 읽지 않았을 때
+  이 기기로 알림을 보냅니다. 알림에는 남은 분량("창세기 1–3장 · 약 12분")이 나오고, 누르면 앱이 열립니다.
+  다 읽은 날과 읽을 분량이 없는 날(계획 없음, 쉬는 날)에는 보내지 않습니다. 켜고 끈 것과 시각은 기기마다 따로 둡니다.
+  아이폰·아이패드는 홈 화면에 추가한 앱(iOS 16.4 이상)에서 켤 수 있습니다. 자세한 것은 아래 [읽기 알림](#읽기-알림).
 
 사용자용 설명서(실제 화면 사진과 메뉴별 사용법, 기기 간 동기화 포함, PDF 31쪽)는 [app/docs/user-manual.pdf](app/docs/user-manual.pdf)에 있고,
 앱의 **설정 > 사용설명서**에서 바로 열 수 있습니다.
@@ -67,9 +71,12 @@ npm start        # http://localhost:5173
 `SYNC_URL`(기본 `http://127.0.0.1:5690`)로 넘깁니다.
 
 ```sh
-npm install --prefix server                                   # 서버 의존성(pg)
+npm install --prefix server                                   # 서버 의존성(pg, web-push)
 DATABASE_URL=postgres://사용자:암호@127.0.0.1:5432/DB이름 node server/sync-server.mjs
 ```
+
+읽기 알림까지 보내려면 `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`도 넘깁니다(만드는 법은 [읽기 알림](#읽기-알림)).
+없으면 동기화만 하고 `/api/push/…`는 503을 돌려줍니다. 알림은 HTTPS(또는 localhost)에서만 켤 수 있습니다.
 
 새번역 본문 데이터(`app/data/`)는 저장소에 들어 있습니다. 다시 만들려면 `npm run crawl`을 실행합니다(약 10분).
 내려받은 HTML은 `.cache/saenew/`에 남으므로, 다시 실행해도 사이트에 요청하지 않고 JSON만 다시 만듭니다.
@@ -84,8 +91,9 @@ npm test         # 분배 알고리즘·파서·동기화 테스트
 npm run icons    # 앱 아이콘, 링크 미리보기 그림(og-image.png), favicon.ico 다시 그리기
 ```
 
-동기화 테스트 중 서버와 주고받는 것은 `TEST_DATABASE_URL`(운영과 다른 PostgreSQL DB, 테스트마다 비운다)이
+동기화·읽기 알림 테스트 중 서버와 주고받는 것은 `TEST_DATABASE_URL`(운영과 다른 PostgreSQL DB, 테스트마다 비운다)이
 있어야 돌고, 없으면 건너뜁니다. 이 서버에서는 `/etc/conquer-the-bible/sync.env`에 들어 있습니다.
+두 테스트가 같은 DB를 비우므로 테스트 파일은 하나씩 차례로 돌립니다(`--test-concurrency=1`).
 
 ```sh
 set -a; . /etc/conquer-the-bible/sync.env; set +a; npm test
@@ -172,6 +180,37 @@ set -a; . /etc/conquer-the-bible/sync.env; set +a; npm test
 
 공간을 쓰는 요청은 `Authorization: Bearer <코드>` 헤더로 코드를 보냅니다. 요청 하나는 4MB, 공간 하나는 50만 줄(지운 줄 포함)까지입니다.
 
+## 읽기 알림
+
+웹 푸시(Push API + VAPID)로 보냅니다. 서버는 기록을 모르므로, **기기가 무엇을 언제 알릴지 계산해 올려 두고 서버는 시각에 맞춰 보내기만** 합니다.
+
+- **기기** (`app/js/reminder.js`): 오늘부터 1년 동안 읽을 분량이 있는 날마다 `{text, done}`을 만듭니다. 이 기기의 모든 계정을 보고,
+  분량이 있는 계정이 모두 읽었으면 `done`입니다. 남은 계정이 하나면 그 분량("창세기 1–3장 · 약 12분"), 여럿이면
+  "계정 2개의 오늘 분량이 남아 있습니다"라고 적습니다(계정 이름은 보내지 않습니다). 이것을 알림 시각·시간대·푸시 구독과 함께
+  `PUT /api/push/subscription`으로 올리고, 기록을 바꾸고 3초 뒤·앱을 열 때·떠날 때 바뀐 것이 있으면 다시 올립니다.
+  동기화 중이면 동기화 코드를 함께 보내 같은 공간의 기기끼리 묶습니다.
+- **서버** (`server/push.mjs`): 30초마다 알림 시각이 지난 구독을 꺼내 다음 날 같은 시각으로 옮기고, 그 시간대의 그날 줄이
+  있고 `done`이 아니면 보냅니다. 같은 동기화 공간의 다른 기기가 그날 다 읽었다고 올렸으면 보내지 않습니다(휴대폰에서 읽었는데
+  태블릿이 알리지 않도록). 서버가 멈췄다가 1시간 넘게 늦게 찾은 알림은 버리고, 기기가 꺼져 있으면 푸시 서비스가 3시간까지
+  기다렸다 전합니다. 푸시 서비스가 구독이 없다고 하면(404·410: 브라우저에서 알림을 끄거나 앱을 지움) 지웁니다.
+- **서비스 워커** (`app/sw.js`): 받은 푸시를 알림으로 띄우고, 누르면 열린 앱 창을 앞으로 가져오거나 새로 엽니다.
+  브라우저가 구독을 바꾸면(`pushsubscriptionchange`) 서버의 구독도 바꿉니다.
+- 서버는 푸시 서비스 주소(FCM, Mozilla, Apple, Windows)로만 보냅니다. 그 밖의 주소는 구독으로 받지 않습니다.
+
+| 요청 | 내용 |
+| --- | --- |
+| `GET /api/push/key` | VAPID 공개 키 → `{key}` |
+| `PUT /api/push/subscription` | `{subscription, time: "21:00", tz: "Asia/Seoul", days: {"2026-10-17": {text, done}}}`. 시각·시간대를 바꿨을 때만 다음 알림 시각을 다시 정한다 |
+| `DELETE /api/push/subscription` | `{endpoint}` 구독을 지운다 |
+| `POST /api/push/test` | `{endpoint}` 지금 시험 알림을 보낸다 (10초에 한 번) |
+| `POST /api/push/renew` | `{old, subscription}` 바뀐 구독으로 옮긴다 (서비스 워커가 보낸다) |
+
+VAPID 키는 한 번 만들어 `/etc/conquer-the-bible/sync.env`에 둡니다. 키를 바꾸면 이미 켠 기기는 앱을 다시 열 때 새로 구독합니다.
+
+```sh
+cd server && node -e "const k=require('web-push').generateVAPIDKeys(); console.log('VAPID_PUBLIC_KEY='+k.publicKey+'\nVAPID_PRIVATE_KEY='+k.privateKey)"
+```
+
 ## 사용 통계
 
 - 어떤 기능을 얼마나 쓰는지 [PostHog](https://posthog.com)로 익명 이벤트를 보냅니다 (앱 열기, 화면 이동, 읽음 표시, 계획 만들기 등).
@@ -191,6 +230,7 @@ app/                  배포할 정적 사이트 (PWA)
   js/planner.js       분량 나누기 (DOM 없는 순수 모듈)
   js/db.js            SQLite 스키마와 질의, 동기화할 줄 모으기·받은 줄 넣기
   js/sync.js          기기 간 동기화: 서버와 주고받기, 언제 할지
+  js/reminder.js      읽기 알림: 날마다 알릴 내용 계산, 푸시 구독
   js/bible.js         본문 불러오기, 구절 표기
   js/views/           화면 (오늘, 달력, 구절, 새 계획, 본문, 설정)
   data/               크롤링한 새번역 본문 (index.json + books/*.json)
@@ -198,6 +238,8 @@ app/                  배포할 정적 사이트 (PWA)
   docs/user-manual.pdf 사용설명서 (설정 화면에서 연다)
 server/
   sync-server.mjs     기기 간 동기화 서버 (PostgreSQL)
+  push.mjs            읽기 알림: 구독 받기, 시각에 맞춰 웹 푸시 보내기
+  http.mjs            두 서버가 함께 쓰는 HTTP 조각
   conquer-the-bible-sync.service  systemd 서비스
 scripts/
   crawl.mjs           새번역 크롤러, lib/parse.mjs 파서
@@ -230,7 +272,7 @@ test/                 node:test 테스트
 
 https://delicious-manna.com 은 nginx가 정적 파일(`/var/www/conquer-the-bible/html`)을 내보내고,
 `/api/`는 동기화 서버(`127.0.0.1:5690`, systemd `conquer-the-bible-sync`)로 넘깁니다.
-DB는 같은 서버의 PostgreSQL(`ctb_sync`)이고 접속 정보는 `/etc/conquer-the-bible/sync.env`(root만 읽음)에 있습니다.
+DB는 같은 서버의 PostgreSQL(`ctb_sync`)이고 접속 정보와 읽기 알림의 VAPID 키는 `/etc/conquer-the-bible/sync.env`(root만 읽음)에 있습니다.
 
 ```sh
 # 앱

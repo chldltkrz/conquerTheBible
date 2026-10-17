@@ -15,6 +15,7 @@ import { changeAccount, openAccountSwitcher, openedProps } from './views/common.
 import { player } from './tts.js';
 import { initAnalytics, track } from './analytics.js';
 import { initSync, syncNow, takeSyncLinkCode } from './sync.js';
+import { initReminder } from './reminder.js';
 import { openJoinDialog } from './views/syncsection.js';
 
 const main = document.getElementById('main');
@@ -184,6 +185,7 @@ async function boot() {
   window.addEventListener('appinstalled', () => track('pwa_installed'));
   const firstRender = route();
   initSync();
+  initReminder();
   if (linkCode != null) firstRender.then(() => openJoinDialog(linkCode, () => route({ refresh: true })));
 
   // 어느 화면에서든: 계정 칩을 누르면 계정 창, data-switch-to 버튼은 그 계정으로 바로 바꾼다.
