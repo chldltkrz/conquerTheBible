@@ -131,15 +131,16 @@ export async function handleSyncAction(action, btn, rerender) {
   }
 }
 
-/** "계정 나, 엄마 · 계획 3개 · 읽음 기록 120개 …" */
+/** "계정 나, 엄마 · 계획 3개 · 읽음 기록 120개 …" (항목 안에서는 줄을 바꾸지 않는다) */
 function summaryText({ accounts, counts }) {
   const n = (t) => counts[t] ?? 0;
+  const item = (label, count) => count && `${label} ${formatNumber(count)}개`.replace(/ /g, '\u00a0');
   const parts = [
     accounts.length ? `계정 ${accounts.join(', ')}` : '계정 없음',
-    n('plans') && `계획 ${formatNumber(n('plans'))}개`,
-    n('readings') && `읽음 기록 ${formatNumber(n('readings'))}개`,
-    n('saved_verses') && `저장한 구절 ${formatNumber(n('saved_verses'))}개`,
-    n('day_notes') + n('verse_notes') && `메모 ${formatNumber(n('day_notes') + n('verse_notes'))}개`,
+    item('계획', n('plans')),
+    item('읽음 기록', n('readings')),
+    item('저장한 구절', n('saved_verses')),
+    item('메모', n('day_notes') + n('verse_notes')),
   ];
   return parts.filter(Boolean).join(' · ');
 }
