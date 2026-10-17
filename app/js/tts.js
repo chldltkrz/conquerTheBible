@@ -17,6 +17,13 @@ export function pickVoice(uri, synth = globalSynth) {
   return ko.find((v) => v.voiceURI === uri) ?? ko.find((v) => v.localService) ?? ko[0] ?? null;
 }
 
+/** 영어 본문(BSB)을 읽을 목소리: 기기 안의 미국 영어 → 기기 안의 영어 → 아무 영어 목소리 */
+export function pickEnglishVoice(synth = globalSynth) {
+  const en = (synth?.getVoices() ?? []).filter((v) => /^en/i.test(v.lang));
+  const local = en.filter((v) => v.localService);
+  return local.find((v) => /^en-US/i.test(v.lang)) ?? local[0] ?? en.find((v) => /^en-US/i.test(v.lang)) ?? en[0] ?? null;
+}
+
 /** 목소리 목록은 늦게 채워지는 브라우저가 있어(크롬) 잠깐 기다린다. */
 export function voicesReady(synth = globalSynth) {
   if (!synth) return Promise.resolve([]);
@@ -65,7 +72,8 @@ export function speechChunks(text, max = 140) {
 
 /**
  * 읽어 주기 플레이어.
- *   items: [{text, key}] 읽을 차례대로. key는 같은 절의 조각끼리 같고, 장 제목처럼 절이 아닌 것은 null.
+ *   items: [{text, key, lang?}] 읽을 차례대로. key는 같은 절의 조각끼리 같고, 장 제목처럼 절이 아닌 것은 null.
+ *     lang은 'ko-KR'(기본) 또는 'en-US'(BSB 본문). 말마다 그 언어의 목소리(setVoice)로 읽는다.
  *   on.index(item, i): 읽기 시작할 때, on.state(playing): 재생/멈춤이 바뀔 때, on.end(): 끝까지 읽었을 때,
  *   on.error(code): 읽을 수 없을 때
  */
@@ -75,7 +83,7 @@ export function createPlayer(synth = globalSynth, Utterance = globalThis.SpeechS
   let playing = false;
   let token = 0; // 취소된 발화의 끝 알림을 무시하기 위한 번호
   let rate = 1;
-  let voice = null;
+  const voices = { ko: null, en: null }; // 언어마다 고른 목소리
   let on = {};
   let wakeLock = null;
   let unlocked = false;
@@ -114,7 +122,8 @@ export function createPlayer(synth = globalSynth, Utterance = globalThis.SpeechS
     on.index?.(items[i], i);
     const my = ++token;
     const u = new Utterance(items[i].text);
-    u.lang = 'ko-KR';
+    u.lang = items[i].lang ?? 'ko-KR';
+    const voice = voices[u.lang.slice(0, 2)];
     if (voice) u.voice = voice;
     u.rate = rate;
     u.onend = () => {
@@ -181,8 +190,9 @@ export function createPlayer(synth = globalSynth, Utterance = globalThis.SpeechS
       index = 0;
       on = handlers;
     },
-    setVoice(v) {
-      voice = v;
+    /** lang: 'ko'(기본) 또는 'en' */
+    setVoice(v, lang = 'ko') {
+      voices[lang] = v;
     },
     setRate(r) {
       rate = r;

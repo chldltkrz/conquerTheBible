@@ -1,8 +1,8 @@
 // 본문 화면의 "소리로 듣기": 플레이어 바, 지금 읽는 절 강조, 속도·목소리 설정
 
-import { book } from '../bible.js';
+import { bookName } from '../bible.js';
 import { getSetting, setSetting } from '../db.js';
-import { player, pickVoice, RATES, speechChunks, voicesReady } from '../tts.js';
+import { player, pickEnglishVoice, pickVoice, RATES, speechChunks, voicesReady } from '../tts.js';
 import { html, setHTML, toast } from '../ui.js';
 import { track } from '../analytics.js';
 
@@ -19,8 +19,8 @@ export const rateLabel = (r) => `${r}×`;
 /**
  * 본문 화면에 듣기를 붙인다. 지원하지 않는 브라우저면 null.
  * @param {HTMLElement} root 본문 화면
- * @param {Map<string, {b, c, v, e, t}>} verses 절 키 → 절
- * @returns {{open(fromKey?), handle(action)} | null}
+ * @param {Map<string, {b, c, v, e, t, tr?}>} verses 절 키 → 절 (tr: 본문 t의 역본, BSB면 영어 목소리로 읽는다)
+ * @returns {{open(fromKey?), handle(action), reset()} | null}
  */
 export function createListening(root, verses) {
   if (!player) return null;
@@ -34,12 +34,13 @@ export function createListening(root, verses) {
     const out = [];
     root.querySelectorAll('.scripture .chapter-title[data-speak], .scripture .verse[data-ref]').forEach((el) => {
       if (el.dataset.speak) {
-        out.push({ text: el.dataset.speak, key: null, label: el.dataset.speak });
+        out.push({ text: el.dataset.speak, key: null, label: el.dataset.speak, lang: el.dataset.speakLang });
         return;
       }
       const v = verses.get(el.dataset.ref);
-      const ref = `${book(v.b).name} ${v.c}:${v.e ? `${v.v}-${v.e}` : v.v}`;
-      for (const text of speechChunks(v.t)) out.push({ text, key: el.dataset.ref, label: ref });
+      const ref = `${bookName(v.b, v.tr)} ${v.c}:${v.e ? `${v.v}-${v.e}` : v.v}`;
+      const lang = v.tr === 'bsb' ? 'en-US' : undefined;
+      for (const text of speechChunks(v.t)) out.push({ text, key: el.dataset.ref, label: ref, lang });
     });
     return out;
   };
@@ -84,11 +85,18 @@ export function createListening(root, verses) {
     if (loaded) return;
     loaded = true;
     await voicesReady();
+    const items = buildItems();
     const voice = pickVoice(getSetting('ttsVoice'));
-    if (!voice) toast('이 기기에 한국어 음성이 없어 기본 음성으로 읽습니다. 기기 설정에서 한국어 음성을 설치해 보세요');
+    const english = items.some((it) => it.lang === 'en-US') ? pickEnglishVoice() : null;
+    if (!voice && items.some((it) => !it.lang)) {
+      toast('이 기기에 한국어 음성이 없어 기본 음성으로 읽습니다. 기기 설정에서 한국어 음성을 설치해 보세요');
+    } else if (!english && items.some((it) => it.lang === 'en-US')) {
+      toast('이 기기에 영어 음성이 없어 기본 음성으로 읽습니다. 기기 설정에서 영어 음성을 설치해 보세요');
+    }
     player.setVoice(voice);
+    player.setVoice(english, 'en');
     player.setRate(getSetting('ttsRate', 1));
-    player.load(buildItems(), {
+    player.load(items, {
       index: (item) => {
         label = item.label;
         highlight(item.key);
@@ -148,6 +156,14 @@ export function createListening(root, verses) {
         highlight(null);
         bar.hidden = true;
       }
+    },
+    /** 본문을 다시 그렸을 때(역본을 바꿨을 때): 읽기를 멈추고 다음에 들을 때 본문을 새로 읽어 온다 */
+    reset() {
+      player.stop();
+      loaded = false;
+      speaking = null;
+      label = '';
+      bar.hidden = true;
     },
   };
 }

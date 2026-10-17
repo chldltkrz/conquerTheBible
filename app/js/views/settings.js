@@ -1,6 +1,6 @@
 // 설정 화면: 읽기 화면, 오프라인 저장, 계획 기록, 백업
 
-import { allBooks } from '../bible.js';
+import { TRANSLATIONS, allBooks, bookUrl } from '../bible.js';
 import { today, ymKey } from '../dates.js';
 import {
   currentAccount,
@@ -16,7 +16,7 @@ import {
   setSetting,
   syncInfo,
 } from '../db.js';
-import { FONT_SIZE, applyReadingSettings } from '../prefs.js';
+import { FONT_SIZE, READING_MODES, applyReadingSettings, readingMode, translationsFor } from '../prefs.js';
 import { confirmDialog, html, setHTML, toast } from '../ui.js';
 import { avatar, isMonthPlan, periodLabel } from './common.js';
 import { koreanVoices, pickVoice, player, RATES, voicesReady } from '../tts.js';
@@ -43,14 +43,24 @@ const manualIcon = html`<svg viewBox="0 0 24 24"><path d="M4 5.5C4 4.7 4.7 4 5.5
 // sw.js의 DATA_CACHE와 같은 이름이어야 한다.
 const DATA_CACHE = 'bible-data-v1';
 
+// 설정 화면의 보기 예: 시편 23:1
+const SAMPLE = {
+  saenew: '주님은 나의 목자시니, 내게 부족함 없어라.',
+  bsb: 'The LORD is my shepherd; I shall not want.',
+};
+
 export async function settingsView(root, _params, { isCurrent }) {
   let downloading = false;
 
-  const cachedBookCount = async () => {
+  /** 역본마다 이 기기에 저장된 책 수 {saenew, bsb}. 지원하지 않는 브라우저면 null */
+  const cachedBookCounts = async () => {
     if (!('caches' in window)) return null;
     const cache = await caches.open(DATA_CACHE);
-    const keys = await cache.keys();
-    return keys.filter((r) => /\/data\/books\/[^/]+\.json$/.test(new URL(r.url).pathname)).length;
+    const paths = (await cache.keys()).map((r) => new URL(r.url).pathname);
+    return {
+      saenew: paths.filter((p) => /\/data\/books\/[^/]+\.json$/.test(p)).length,
+      bsb: paths.filter((p) => /\/data\/bsb\/books\/[^/]+\.json$/.test(p)).length,
+    };
   };
 
   const render = async () => {
@@ -60,7 +70,10 @@ export async function settingsView(root, _params, { isCurrent }) {
     const me = currentAccount().id;
     const size = getSetting('fontSize', FONT_SIZE.default);
     const family = getSetting('fontFamily', 'serif');
-    const cached = await cachedBookCount();
+    const mode = readingMode();
+    const inUse = translationsFor(mode); // 오프라인 저장은 읽는 역본만
+    const cached = await cachedBookCounts();
+    const missing = cached && inUse.some((tr) => cached[tr] < 66);
     const voices = player ? (await voicesReady(), koreanVoices()) : [];
     const voiceURI = getSetting('ttsVoice');
     const rate = getSetting('ttsRate', 1);
@@ -115,7 +128,21 @@ export async function settingsView(root, _params, { isCurrent }) {
                 <button role="radio" data-family="sans" aria-checked="${family === 'sans'}">고딕</button>
               </div>
             </div>
-            <p class="sample">주님은 나의 목자시니, 내게 부족함 없어라.</p>
+            <div class="field-row">
+              <span>역본</span>
+              <div class="segmented" role="radiogroup" aria-label="역본">
+                ${READING_MODES.map(
+                  (x) => html`<button role="radio" data-reading-mode="${x.id}" aria-checked="${x.id === mode}">${x.label}</button>`,
+                )}
+              </div>
+            </div>
+            <p class="sample ${mode === 'both' ? 'is-both' : ''}">
+              ${mode === 'bsb'
+                ? html`<span lang="en">${SAMPLE.bsb}</span>`
+                : html`${SAMPLE.saenew}${mode === 'both' ? html`<span class="en" lang="en">${SAMPLE.bsb}</span>` : ''}`}
+            </p>
+            <p class="muted small">BSB(Berean Standard Bible)는 현대 영어 번역입니다. 함께 보기는 새번역 절마다 아래에 BSB를 보여 줍니다.
+              본문 화면 위에서도 바꿀 수 있고, 계획의 분량과 절 번호는 새번역을 따릅니다.</p>
           </div>
         </section>
 
@@ -157,10 +184,14 @@ export async function settingsView(root, _params, { isCurrent }) {
             <p>
               ${cached == null
                 ? '이 브라우저는 오프라인 저장을 지원하지 않습니다.'
-                : html`성경 66권 중 <b id="cached-count">${cached}</b>권이 이 기기에 저장되어 있습니다.`}
+                : inUse.length === 1 && inUse[0] === 'saenew'
+                  ? html`성경 66권 중 <b>${cached.saenew}</b>권이 이 기기에 저장되어 있습니다.`
+                  : html`${inUse.map(
+                      (tr, i) => html`${i ? ', ' : ''}${TRANSLATIONS[tr].name} 66권 중 <b>${cached[tr]}</b>권`,
+                    )}이 이 기기에 저장되어 있습니다.`}
             </p>
-            <p class="muted">계획을 만들면 그 계획에 필요한 책은 자동으로 저장됩니다. 전체를 받아 두면 인터넷 없이도 모든 본문을 읽을 수 있습니다(약 6MB).</p>
-            ${cached != null && cached < 66
+            <p class="muted">계획을 만들면 그 계획에 필요한 책은 자동으로 저장됩니다. 전체를 받아 두면 인터넷 없이도 모든 본문을 읽을 수 있습니다(새번역 약 6MB${inUse.includes('bsb') ? ', BSB 약 5MB' : ''}).</p>
+            ${missing
               ? html`<button class="btn btn-ghost" data-action="download">성경 전체 저장하기</button>
                   <div class="progress is-hidden" id="dl-progress"><span style="width:0"></span></div>`
               : ''}
@@ -238,7 +269,8 @@ export async function settingsView(root, _params, { isCurrent }) {
           : ''}
 
         <section class="block about">
-          <p>성경 본문: 새번역 © 대한성서공회. 개인 묵상과 읽기 용도로만 사용하세요.</p>
+          <p>성경 본문: 새번역 © 대한성서공회. 개인 묵상과 읽기 용도로만 사용하세요.
+            BSB(Berean Standard Bible)는 퍼블릭 도메인입니다 (bereanbible.com).</p>
         </section>`,
     );
   };
@@ -251,10 +283,11 @@ export async function settingsView(root, _params, { isCurrent }) {
     bar.classList.remove('is-hidden');
     const cache = await caches.open(DATA_CACHE);
     const books = allBooks();
+    // 읽는 역본만 받는다 (함께 보기면 새번역과 BSB 모두)
+    const files = translationsFor().flatMap((tr) => books.map((b) => new URL(bookUrl(b.code, tr), location.href).href));
     let done = 0;
     let failed = 0;
-    for (const b of books) {
-      const url = new URL(`data/books/${b.code}.json`, location.href).href;
+    for (const url of files) {
       if (!(await cache.match(url))) {
         try {
           await cache.add(url);
@@ -263,12 +296,12 @@ export async function settingsView(root, _params, { isCurrent }) {
         }
       }
       done++;
-      bar.firstElementChild.style.width = `${Math.round((done / books.length) * 100)}%`;
+      bar.firstElementChild.style.width = `${Math.round((done / files.length) * 100)}%`;
     }
     downloading = false;
     toast(failed ? `${failed}권을 받지 못했습니다. 인터넷 연결을 확인하세요.` : '성경 전체를 저장했습니다');
     render();
-    track('offline_download_completed', { total: books.length, failed });
+    track('offline_download_completed', { total: files.length, failed });
   };
 
   const downloadBackup = () => {
@@ -294,6 +327,9 @@ export async function settingsView(root, _params, { isCurrent }) {
     const d = btn.dataset;
     if (d.syncAction) {
       await handleSyncAction(d.syncAction, btn, render);
+    } else if (d.readingMode) {
+      await setSetting('translation', d.readingMode);
+      render();
     } else if (d.family) {
       await setSetting('fontFamily', d.family);
       applyReadingSettings();

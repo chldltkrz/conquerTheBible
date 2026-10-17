@@ -1,7 +1,8 @@
-// 말씀 검색 화면: 새번역 전체에서 낱말로 찾고, 결과에서 바로 저장·공유한다.
+// 말씀 검색 화면: 새번역이나 BSB 전체에서 낱말로 찾고, 결과에서 바로 저장·공유한다.
 
-import { allBooks, book, loadBook } from '../bible.js';
+import { TRANSLATIONS, allBooks, book, loadBook } from '../bible.js';
 import { listSavedVerses, saveVerseToday, verseKey } from '../db.js';
+import { readingMode } from '../prefs.js';
 import { esc, html, raw, setHTML, toast } from '../ui.js';
 import { bookmarkIcon, shareIcon, shareVerses } from './common.js';
 import { verseHead, verseRef } from './saved.js';
@@ -9,45 +10,49 @@ import { track } from '../analytics.js';
 
 const PAGE = 50;
 
-// 검색할 본문: 처음 검색할 때 66권을 모두 불러 절 목록 하나로 펼쳐 둔다.
+// 검색할 본문: 그 역본으로 처음 검색할 때 66권을 모두 불러 절 목록 하나로 펼쳐 둔다.
 // (서비스 워커가 책을 캐시하므로 다음부터는 오프라인에서도 바로 찾는다)
-let corpus = null; // [{b, c, v, e, t}]
-let loading = null;
+const corpora = {}; // 역본 → [{b, c, v, e, t, low?}]  low: 대소문자 없이 찾을 BSB 본문
+const loadings = {};
 
-function loadCorpus(onProgress) {
-  if (corpus) return Promise.resolve(corpus);
-  loading ??= (async () => {
+function loadCorpus(tr, onProgress) {
+  if (corpora[tr]) return Promise.resolve(corpora[tr]);
+  loadings[tr] ??= (async () => {
     const books = allBooks();
     let done = 0;
     const data = await Promise.all(
       books.map((b) =>
-        loadBook(b.code).then((d) => {
+        loadBook(b.code, tr).then((d) => {
           onProgress(++done, books.length);
           return d;
         }),
       ),
     );
-    corpus = data.flatMap((bk) =>
-      bk.chapters.flatMap((ch) => ch.verses.map((x) => ({ b: bk.code, c: ch.c, v: x.v, e: x.e, t: x.t }))),
+    corpora[tr] = data.flatMap((bk) =>
+      bk.chapters.flatMap((ch) =>
+        ch.verses.map((x) => ({ b: bk.code, c: ch.c, v: x.v, e: x.e, t: x.t, ...(tr === 'bsb' ? { low: x.t.toLowerCase() } : {}) })),
+      ),
     );
-    return corpus;
+    return corpora[tr];
   })().catch((err) => {
-    loading = null;
+    delete loadings[tr];
     throw err;
   });
-  return loading;
+  return loadings[tr];
 }
 
-// 화면을 떠났다 돌아와도 검색어와 결과를 유지한다.
-const state = { q: '', scope: 'all', shown: PAGE, open: new Set() };
-// 사용 통계에 마지막으로 센 검색(범위|낱말). 돌아와서 같은 검색을 다시 그려도 두 번 세지 않는다.
+// 화면을 떠났다 돌아와도 검색어와 결과를 유지한다. tr: 찾을 역본 (처음에는 읽는 역본을 따른다)
+const state = { q: '', scope: 'all', tr: null, shown: PAGE, open: new Set() };
+// 사용 통계에 마지막으로 센 검색(역본|범위|낱말). 돌아와서 같은 검색을 다시 그려도 두 번 세지 않는다.
 let lastTrackedSearch = '';
 
 const wordsOf = (q) => q.trim().split(/\s+/).filter(Boolean);
+const corpus = () => corpora[state.tr];
 
-/** 낱말이 모두 들어 있는 절의 corpus 위치 목록 */
+/** 낱말이 모두 들어 있는 절의 corpus 위치 목록. BSB는 대소문자를 가리지 않는다. */
 function find(q, scope) {
-  const words = wordsOf(q);
+  const english = state.tr === 'bsb';
+  const words = wordsOf(english ? q.toLowerCase() : q);
   if (!words.length) return [];
   const inScope =
     scope === 'all'
@@ -56,8 +61,9 @@ function find(q, scope) {
         ? (x) => book(x.b).testament === scope
         : (x) => x.b === scope;
   const out = [];
-  corpus.forEach((x, i) => {
-    if (inScope(x) && words.every((w) => x.t.includes(w))) out.push(i);
+  corpus().forEach((x, i) => {
+    const text = english ? x.low : x.t;
+    if (inScope(x) && words.every((w) => text.includes(w))) out.push(i);
   });
   return out;
 }
@@ -70,7 +76,7 @@ function highlight(text, words) {
     .join('|');
   let out = '';
   let last = 0;
-  for (const m of text.matchAll(new RegExp(pattern, 'g'))) {
+  for (const m of text.matchAll(new RegExp(pattern, state.tr === 'bsb' ? 'gi' : 'g'))) {
     out += `${esc(text.slice(last, m.index))}<mark>${esc(m[0])}</mark>`;
     last = m.index + m[0].length;
   }
@@ -80,15 +86,23 @@ function highlight(text, words) {
 const scopeLabel = (scope) =>
   scope === 'all' ? '성경 전체' : scope === 'OT' ? '구약' : scope === 'NT' ? '신약' : book(scope).name;
 
+const placeholder = () => (state.tr === 'bsb' ? '낱말로 찾기 (예: shepherd, peace)' : '낱말로 찾기 (예: 목자, 평안)');
+
 export async function searchView(root, _params, { isCurrent }) {
   const books = allBooks();
+  state.tr ??= readingMode() === 'bsb' ? 'bsb' : 'saenew';
   setHTML(
     root,
-    html`${verseHead('search', '새번역 전체에서 찾기', '말씀 검색')}
+    html`${verseHead('search', '새번역·BSB 전체에서 찾기', '말씀 검색')}
       <form class="search-box" role="search">
-        <input type="search" name="q" value="${state.q}" placeholder="낱말로 찾기 (예: 목자, 평안)"
+        <input type="search" name="q" value="${state.q}" placeholder="${placeholder()}"
           enterkeyhint="search" autocomplete="off" aria-label="찾을 낱말" />
         <button class="btn btn-primary">찾기</button>
+        <select name="tr" class="tr-select" aria-label="찾을 역본">
+          ${Object.values(TRANSLATIONS).map(
+            (t) => html`<option value="${t.id}" ${state.tr === t.id ? 'selected' : ''}>${t.name}</option>`,
+          )}
+        </select>
         <select name="scope" aria-label="찾을 범위">
           ${[
             ['all', '성경 전체'],
@@ -121,7 +135,7 @@ export async function searchView(root, _params, { isCurrent }) {
       setHTML(
         out,
         html`<p class="search-status">찾을 낱말을 입력하세요. 여러 낱말을 띄어 쓰면 모두 들어 있는 절을 찾습니다.
-          ${corpus ? '' : html`<br /><small>처음 찾을 때 성경 전체(약 6MB)를 불러옵니다.</small>`}</p>`,
+          ${corpus() ? '' : html`<br /><small>처음 찾을 때 ${TRANSLATIONS[state.tr].name} 성경 전체(약 5–6MB)를 불러옵니다.</small>`}</p>`,
       );
       return;
     }
@@ -129,12 +143,12 @@ export async function searchView(root, _params, { isCurrent }) {
     setHTML(
       out,
       html`<p class="search-status" role="status">
-          <b>‘${state.q.trim()}’</b> ${scopeLabel(state.scope)}에서 ${results.length.toLocaleString('ko-KR')}절
+          <b>‘${state.q.trim()}’</b> ${TRANSLATIONS[state.tr].name} ${scopeLabel(state.scope)}에서 ${results.length.toLocaleString('ko-KR')}절
         </p>
         ${results.length
-          ? html`<ul class="saved-list search-results">
+          ? html`<ul class="saved-list search-results" ${state.tr === 'bsb' ? raw('lang="en"') : ''}>
               ${shown.map((i) => {
-                const x = corpus[i];
+                const x = corpus()[i];
                 const key = verseKey(x.b, x.c, x.v);
                 const n = counts.get(key);
                 const open = state.open.has(key);
@@ -165,10 +179,10 @@ export async function searchView(root, _params, { isCurrent }) {
 
   /** 앞뒤 두 절씩 (같은 장 안에서) */
   const context = (i, words) => {
-    const x = corpus[i];
+    const x = corpus()[i];
     const around = [];
     for (let j = i - 2; j <= i + 2; j++) {
-      const y = corpus[j];
+      const y = corpus()[j];
       if (y && y.b === x.b && y.c === x.c) around.push([j, y]);
     }
     return html`<div class="search-context">
@@ -185,7 +199,7 @@ export async function searchView(root, _params, { isCurrent }) {
   const trackSearch = () => {
     clearTimeout(trackTimer);
     const words = wordsOf(state.q);
-    const key = `${state.scope}|${words.join(' ')}`;
+    const key = `${state.tr}|${state.scope}|${words.join(' ')}`;
     if (!words.length || key === lastTrackedSearch) return;
     lastTrackedSearch = key;
     const count = results.length;
@@ -203,10 +217,10 @@ export async function searchView(root, _params, { isCurrent }) {
       renderResults();
       return;
     }
-    if (!corpus) {
+    if (!corpus()) {
       setHTML(out, html`<p class="search-status" role="status">성경을 불러오는 중…</p>`);
       try {
-        await loadCorpus((done, total) => {
+        await loadCorpus(state.tr, (done, total) => {
           if (my === seq && isCurrent()) {
             setHTML(out, html`<p class="search-status" role="status">성경을 불러오는 중… ${done}/${total}권</p>`);
           }
@@ -239,6 +253,13 @@ export async function searchView(root, _params, { isCurrent }) {
     timer = setTimeout(run, 300);
   };
   root.onchange = (e) => {
+    if (e.target.name === 'tr') {
+      state.tr = e.target.value;
+      state.open.clear();
+      form.q.placeholder = placeholder();
+      run();
+      return;
+    }
     if (e.target.name !== 'scope') return;
     state.scope = e.target.value;
     run();
@@ -262,9 +283,9 @@ export async function searchView(root, _params, { isCurrent }) {
       else state.open.add(d.context);
       renderResults();
     } else if (d.share) {
-      shareVerses([corpus[Number(d.share)]], 'search');
+      shareVerses([corpus()[Number(d.share)]], 'search', state.tr);
     } else if (d.save) {
-      const x = corpus[Number(d.save)];
+      const x = corpus()[Number(d.save)];
       try {
         const added = await saveVerseToday(x);
         if (added) track('verses_saved', { surface: 'search', count: 1 });

@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node scripts/serve.mjs",
     "crawl": "node scripts/crawl.mjs",
+    "bsb": "node scripts/bsb.mjs",
     "test": "node --test",
     "icons": "node scripts/make-icons.mjs",
     "vendor": "node scripts/vendor.mjs",

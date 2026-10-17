@@ -32,6 +32,7 @@ import {
 } from '../dates.js';
 import { listPlans, MAX_PLAN_DAYS, partKey, planTrackDays, plansOverlapping, savePlan } from '../db.js';
 import { buildGroupPlan, buildParallelPlan, buildPlan } from '../planner.js';
+import { translationsFor } from '../prefs.js';
 import { confirmDialog, formatNumber, html, setHTML, toast } from '../ui.js';
 import { accountPrefix, dayDate, dayList, newPlanHref, periodLabel } from './common.js';
 import { track } from '../analytics.js';
@@ -734,8 +735,8 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
       is_first_plan: isFirstPlan,
       starts_in_days: daysBetween(now, start),
     }));
-    // 이번 계획에 필요한 책을 미리 받아 두면 오프라인에서도 읽을 수 있다.
-    Promise.all(Object.keys(sel).map(loadBook)).catch(() => {});
+    // 이번 계획에 필요한 책을 미리 받아 두면 오프라인에서도 읽을 수 있다. (BSB로 읽고 있으면 BSB도)
+    Promise.all(translationsFor().flatMap((tr) => Object.keys(sel).map((code) => loadBook(code, tr)))).catch(() => {});
     const label = isWholeMonth(start, end) ? `${start.m}월` : formatPeriod(start, end);
     toast(
       same

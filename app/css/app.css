@@ -1938,6 +1938,44 @@ button.stat:active {
   margin: 0 0 10px;
 }
 
+/* ── 역본 (새번역 · BSB · 함께 보기) ─────────────────── */
+.tr-switch {
+  display: flex;
+  width: fit-content;
+  margin: 10px auto 0;
+}
+
+.tr-switch button {
+  min-width: 0;
+  height: 32px;
+  padding: 0 14px;
+  font-size: 14px;
+}
+
+/* 함께 보기: 새번역 절 아래에 BSB를 붙이고, 산문도 한 절씩 줄을 나눈다 */
+.scripture .en,
+.sample .en {
+  display: block;
+  margin-top: 0.15em;
+  font-family: var(--font-sans);
+  font-size: 0.8em;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.poetry .verse .en {
+  text-indent: 0;
+}
+
+.scripture.is-both .prose .verse {
+  display: block;
+  margin-bottom: 0.6em;
+}
+
+.sample .en {
+  margin-top: 6px;
+}
+
 /* ── 절 선택·저장 ─────────────────────────────────────── */
 .scripture .verse {
   cursor: pointer;
@@ -2749,7 +2787,7 @@ body:has(.select-bar:not([hidden])) .toast {
 }
 
 .search-box select {
-  flex: 1 1 100%;
+  flex: 1 1 160px;
   height: 40px;
   padding: 0 10px;
   border: 1px solid var(--line);
@@ -2758,6 +2796,10 @@ body:has(.select-bar:not([hidden])) .toast {
   color: var(--ink);
   font: inherit;
   font-size: 15px;
+}
+
+.search-box .tr-select {
+  flex: 0 0 104px;
 }
 
 .search-status {

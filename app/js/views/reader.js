@@ -1,6 +1,15 @@
-// 본문 화면: 그날 분량의 새번역 본문, 마음에 남는 절 저장, 읽음 완료 버튼
+// 본문 화면: 그날 분량의 본문(새번역·BSB·함께 보기), 마음에 남는 절 저장, 읽음 완료 버튼
 
-import { book, chapterUnit, formatSegments, loadBook, readingMinutes } from '../bible.js';
+import {
+  TRANSLATIONS,
+  book,
+  bookName,
+  chapterUnit,
+  formatSegments,
+  loadBook,
+  readingMinutes,
+  segmentVerses,
+} from '../bible.js';
 import { formatDay, formatTimestamp, ymKey } from '../dates.js';
 import {
   addPendingSave,
@@ -17,8 +26,8 @@ import {
   verseCounts,
   verseKey,
 } from '../db.js';
-import { FONT_SIZE, applyReadingSettings } from '../prefs.js';
-import { html, setHTML, toast } from '../ui.js';
+import { FONT_SIZE, READING_MODES, applyReadingSettings, readingMode } from '../prefs.js';
+import { html, raw, setHTML, toast } from '../ui.js';
 import {
   accountPrefix,
   bookmarkIcon,
@@ -82,6 +91,11 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
           <button class="icon-btn" data-font="1" aria-label="글자 크게">가<sup>+</sup></button>
         </div>
       </header>
+      <div class="segmented tr-switch" role="radiogroup" aria-label="역본">
+        ${READING_MODES.map(
+          (x) => html`<button role="radio" data-mode="${x.id}" aria-checked="${x.id === readingMode()}" title="${x.detail}">${x.label}</button>`,
+        )}
+      </div>
       <article class="scripture" aria-busy="true">
         <p class="muted loading">본문을 불러오는 중…</p>
       </article>
@@ -222,6 +236,8 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
   };
 
   root.onclick = async (e) => {
+    const mode = e.target.closest('[data-mode]')?.dataset.mode;
+    if (mode) return changeMode(mode);
     const font = e.target.closest('[data-font]');
     if (font) {
       const size = getSetting('fontSize', FONT_SIZE.default) + Number(font.dataset.font);
@@ -244,8 +260,11 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
       return listening?.open(first);
     }
     if (action === 'save' || action === 'unsave') return saveSelection(action === 'save');
-    // 공유한 뒤에도 선택은 그대로 두어 이어서 저장할 수 있게 한다.
-    if (action === 'share') return shareVerses([...selected].map((k) => verses.get(k)), 'reader');
+    // 공유한 뒤에도 선택은 그대로 두어 이어서 저장할 수 있게 한다. (함께 보기면 새번역으로 공유한다)
+    if (action === 'share') {
+      const list = [...selected].map((k) => verses.get(k));
+      return shareVerses(list, 'reader', list[0]?.tr);
+    }
     if (action === 'clear-selection') {
       selected.clear();
       repaint();
@@ -338,55 +357,109 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
 
   // ── 본문 ─────────────────────────────────────────────────
   const article = root.querySelector('.scripture');
-  try {
-    const books = await Promise.all([...new Set(entry.segments.map((s) => s.b))].map(loadBook));
-    if (!isCurrent()) return;
-    const byCode = new Map(books.map((b) => [b.code, b]));
-    const chapters = (segments) => segments.map((s) => renderSegment(s, byCode.get(s.b), verses));
-    setHTML(
-      article,
-      parallel
-        ? parts.map(
-            (p) => html`<section class="track" id="track-${p.track}">
-              <div class="track-head">
-                <b>${p.title}</b><span>${formatSegments(p.segments)} · 약 ${readingMinutes(p.chars)}분</span>
-              </div>
-              ${chapters(p.segments)}
-              <div class="track-foot" data-track-foot="${p.track}"></div>
-            </section>`,
-          )
-        : chapters(entry.segments),
-    );
-    parts.forEach(renderTrackFoot);
-    article.removeAttribute('aria-busy');
-    track('reading_opened', () => ({ ...readingEventProps(plan, day), already_read: !!dayReadAt() }));
-    repaint();
-    // 오늘 화면에서 특정 책을 눌러 들어왔으면 그 책 부분으로 내려간다.
-    if (focusTrack != null) root.querySelector(`#track-${focusTrack}`)?.scrollIntoView();
-  } catch (err) {
-    if (!isCurrent()) return;
-    track('reading_load_failed', () => ({ books: [...new Set(entry.segments.map((s) => s.b))], online: navigator.onLine }));
-    setHTML(
-      article,
-      html`<p class="error">${err.message}</p>
-        <p class="muted">인터넷에 연결되어 있지 않다면, 설정에서 성경 전체를 미리 저장해 두면 오프라인에서도 읽을 수 있습니다.</p>`,
-    );
-  }
+  const codes = [...new Set(entry.segments.map((s) => s.b))];
+  let opened = false;
+
+  /** 지금 고른 역본(보기)으로 본문을 그린다. 역본을 바꾸면 다시 부른다. */
+  const showText = async () => {
+    const mode = readingMode();
+    const load = (tr) => Promise.all(codes.map((c) => loadBook(c, tr))).then((list) => new Map(list.map((b) => [b.code, b])));
+    try {
+      const [ko, en] = await Promise.all([mode === 'bsb' ? null : load('saenew'), mode === 'saenew' ? null : load('bsb')]);
+      if (!isCurrent() || mode !== readingMode()) return;
+      verses.clear();
+      const chapters = (segments) => segments.map((s) => renderSegment(s, { ko: ko?.get(s.b), en: en?.get(s.b), mode }, verses));
+      article.classList.toggle('is-both', mode === 'both');
+      setHTML(
+        article,
+        parallel
+          ? parts.map(
+              (p) => html`<section class="track" id="track-${p.track}">
+                <div class="track-head">
+                  <b>${p.title}</b><span>${formatSegments(p.segments)} · 약 ${readingMinutes(p.chars)}분</span>
+                </div>
+                ${chapters(p.segments)}
+                <div class="track-foot" data-track-foot="${p.track}"></div>
+              </section>`,
+            )
+          : chapters(entry.segments),
+      );
+      parts.forEach(renderTrackFoot);
+      article.removeAttribute('aria-busy');
+      repaint();
+      if (opened) return;
+      opened = true;
+      track('reading_opened', () => ({ ...readingEventProps(plan, day), already_read: !!dayReadAt() }));
+      // 오늘 화면에서 특정 책을 눌러 들어왔으면 그 책 부분으로 내려간다.
+      if (focusTrack != null) root.querySelector(`#track-${focusTrack}`)?.scrollIntoView();
+    } catch (err) {
+      if (!isCurrent()) return;
+      track('reading_load_failed', () => ({ books: codes, online: navigator.onLine }));
+      setHTML(
+        article,
+        html`<p class="error">${err.message}</p>
+          <p class="muted">인터넷에 연결되어 있지 않다면, 설정에서 성경 전체를 미리 저장해 두면 오프라인에서도 읽을 수 있습니다.</p>`,
+      );
+    }
+  };
+
+  /** 역본 바꾸기: 기기에 기억해 두고 본문만 다시 그린다 (메모·읽음 표시는 그대로) */
+  const changeMode = async (mode) => {
+    if (mode === readingMode()) return;
+    root.querySelectorAll('.tr-switch [data-mode]').forEach((b) => b.setAttribute('aria-checked', b.dataset.mode === mode));
+    await setSetting('translation', mode);
+    listening?.reset();
+    selected.clear();
+    renderBar();
+    article.setAttribute('aria-busy', 'true');
+    await showText();
+  };
+
+  await showText();
 }
 
-/** 한 구간의 본문. 각 절을 verses(키 → 절 정보)에도 담는다. */
-function renderSegment(seg, bookData, verses) {
-  const ch = bookData.chapters[seg.c - 1];
-  const inRange = (v) => seg.from == null || (v >= seg.from && v <= seg.to);
-  const list = ch.verses.filter((v) => inRange(v.v));
+/**
+ * 한 구간의 본문. 각 절을 verses(키 → 절 정보)에도 담는다.
+ * mode가 'bsb'면 BSB 본문을, 'both'면 새번역 절마다 아래에 BSB를 붙인다. 단락 제목·각주는 위에 보이는 역본 것을 쓴다.
+ */
+function renderSegment(seg, { ko, en, mode }, verses) {
+  const tr = mode === 'bsb' ? 'bsb' : 'saenew';
+  const main = tr === 'bsb' ? en : ko;
+  const ch = main.chapters[seg.c - 1];
+  const list = segmentVerses(seg, main);
   const whole = seg.from == null;
   const unit = chapterUnit(seg.b);
-  const last = list.at(-1);
-  const heading = whole
-    ? `${book(seg.b).name} ${seg.c}${unit}`
-    : `${book(seg.b).name} ${seg.c}${unit} ${list[0].v}–${last.e ?? last.v}절`;
-  // 소리로 들을 때 읽는 장 제목 ("–"를 읽지 않도록 따로 만든다)
-  const speak = whole ? heading : `${book(seg.b).name} ${seg.c}${unit} ${list[0].v}절부터`;
+  const name = book(seg.b).name;
+  if (!list.length) {
+    return html`<section class="chapter">
+      <h2 class="chapter-title">${name} ${seg.c}${unit}</h2>
+      <p class="muted">이 범위는 ${TRANSLATIONS[tr].name}에 본문이 없습니다.</p>
+    </section>`;
+  }
+  const first = list[0].v;
+  const lastV = list.at(-1).e ?? list.at(-1).v;
+  const inRange = (v) => v >= first && v <= lastV;
+  const heading = whole ? `${name} ${seg.c}${unit}` : `${name} ${seg.c}${unit} ${first}–${lastV}절`;
+  // 소리로 들을 때 읽는 장 제목 ("–"를 읽지 않도록 따로 만든다). BSB는 영어로 읽는다.
+  const speak =
+    tr === 'bsb'
+      ? `${bookName(seg.b, 'bsb')} ${seg.b === 'psa' ? '' : 'chapter '}${seg.c}${whole ? '' : `, from verse ${first}`}`
+      : whole
+        ? heading
+        : `${name} ${seg.c}${unit} ${first}절부터`;
+  // BSB 본문·제목에는 lang="en"을 달아 글꼴·줄 나눔·화면 읽기 프로그램이 영어로 다루게 한다.
+  const lang = tr === 'bsb' ? raw(' lang="en"') : '';
+
+  // 함께 보기: BSB 절을 그 번호가 든 새번역 절 아래에 붙인다. (새번역에 없는 번호는 바로 앞 절에)
+  const below = new Map();
+  if (mode === 'both' && en) {
+    for (const x of segmentVerses(seg, en)) {
+      const host =
+        list.find((k) => x.v >= k.v && x.v <= (k.e ?? k.v)) ?? list.filter((k) => k.v <= x.v).at(-1) ?? list[0];
+      if (!below.has(host)) below.set(host, []);
+      below.get(host).push(x);
+    }
+  }
 
   // 단락 제목·시편 표제는 해당 절 앞에서 문단을 새로 시작한다.
   const headsAt = new Map();
@@ -399,7 +472,7 @@ function renderSegment(seg, bookData, verses) {
   const blocks = [];
   let current = [];
   const flush = () => {
-    if (current.length) blocks.push(html`<p class="${poetry ? 'poetry' : 'prose'}">${current}</p>`);
+    if (current.length) blocks.push(html`<p class="${poetry ? 'poetry' : 'prose'}"${lang}>${current}</p>`);
     current = [];
   };
   for (const v of list) {
@@ -407,20 +480,31 @@ function renderSegment(seg, bookData, verses) {
     if (heads) {
       flush();
       for (const h of heads) {
-        blocks.push(h.kind === 'title' ? html`<p class="psalm-title">${h.t}</p>` : html`<h3 class="section">${h.t}</h3>`);
+        blocks.push(
+          h.kind === 'title'
+            ? html`<p class="psalm-title"${lang}>${h.t}</p>`
+            : html`<h3 class="section"${lang}>${h.t}</h3>`,
+        );
       }
     }
     const key = verseKey(seg.b, seg.c, v.v);
-    verses.set(key, { b: seg.b, c: seg.c, v: v.v, e: v.e, t: v.t });
+    const extra = below.get(v);
+    verses.set(key, { b: seg.b, c: seg.c, v: v.v, e: v.e, t: v.t, tr });
     current.push(
-      html`<span class="verse" data-ref="${key}" tabindex="0" role="button" aria-pressed="false"><sup class="vn">${v.e ? `${v.v}-${v.e}` : v.v}</sup>${v.t}<span class="vcount"></span></span> `,
+      html`<span class="verse" data-ref="${key}" tabindex="0" role="button" aria-pressed="false"><sup class="vn">${v.e ? `${v.v}-${v.e}` : v.v}</sup>${v.t}<span class="vcount"></span>${
+        extra
+          ? html`<span class="en" lang="en">${extra.map(
+              (x) => html`${extra.length > 1 || x.v !== v.v ? html`<sup class="vn">${x.v}</sup>` : ''}${x.t} `,
+            )}</span>`
+          : ''
+      }</span> `,
     );
   }
   flush();
 
-  const notes = ch.notes.filter((n) => (n.v === 0 ? whole || seg.from === ch.verses[0].v : inRange(n.v)));
+  const notes = ch.notes.filter((n) => (n.v === 0 ? whole || first === ch.verses[0].v : inRange(n.v)));
   return html`<section class="chapter">
-    <h2 class="chapter-title" data-speak="${speak}">${heading}</h2>
+    <h2 class="chapter-title" data-speak="${speak}" ${tr === 'bsb' ? raw(' data-speak-lang="en-US"') : ''}>${heading}</h2>
     ${blocks}
     ${notes.length
       ? html`<details class="notes">

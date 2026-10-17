@@ -1,4 +1,4 @@
-// 새번역 데이터 불러오기와 성경 구절 표기
+// 성경 데이터(새번역, BSB) 불러오기와 성경 구절 표기
 
 import { verseNumbers } from './planner.js';
 
@@ -26,17 +26,59 @@ export const getIndex = () => index;
 export const allBooks = () => [...byCode.values()];
 export const book = (code) => byCode.get(code);
 
+/**
+ * 역본. 계획의 분량과 절 번호는 새번역을 기준으로 하고, 다른 역본은 같은 장·절을 보여 준다.
+ * BSB(Berean Standard Bible)는 퍼블릭 도메인이다 (scripts/bsb.mjs로 만든다).
+ */
+export const TRANSLATIONS = {
+  saenew: { id: 'saenew', name: '새번역', lang: 'ko-KR', dir: 'data/books' },
+  bsb: { id: 'bsb', name: 'BSB', full: 'Berean Standard Bible', lang: 'en-US', dir: 'data/bsb/books' },
+};
+
+const englishNames = new Map(); // BSB 책 코드 → 영어 이름 (불러온 책만)
+
 /** 책 한 권의 본문. 서비스 워커가 캐시하므로 한 번 읽은 책은 오프라인에서도 열린다. */
-export function loadBook(code) {
-  if (!bookCache.has(code)) {
-    const p = fetch(`data/books/${code}.json`).then((res) => {
-      if (!res.ok) throw new Error(`${book(code)?.name ?? code} 본문을 불러오지 못했습니다`);
-      return res.json();
-    });
-    p.catch(() => bookCache.delete(code));
-    bookCache.set(code, p);
+export function loadBook(code, translation = 'saenew') {
+  const key = `${translation}:${code}`;
+  if (!bookCache.has(key)) {
+    const tr = TRANSLATIONS[translation];
+    const p = fetch(bookUrl(code, translation))
+      .then((res) => {
+        if (!res.ok) throw new Error(`${book(code)?.name ?? code} ${translation === 'saenew' ? '' : `${tr.name} `}본문을 불러오지 못했습니다`);
+        return res.json();
+      })
+      .then((data) => rememberBook(data, translation));
+    p.catch(() => bookCache.delete(key));
+    bookCache.set(key, p);
   }
-  return bookCache.get(code);
+  return bookCache.get(key);
+}
+
+/** 불러온 책의 이름을 기억해 둔다 (공유할 때 BSB 영어 이름). 테스트에서는 파일을 직접 읽어 넘긴다. */
+export function rememberBook(data, translation = 'saenew') {
+  if (translation === 'bsb') englishNames.set(data.code, data.name);
+  return data;
+}
+
+/** 책 본문 파일 주소 (앱 기준 상대 경로) */
+export const bookUrl = (code, translation = 'saenew') => `${TRANSLATIONS[translation].dir}/${code}.json`;
+
+/** 역본에 맞는 책 이름. BSB면 영어 이름(불러온 책만, 아니면 새번역 이름) */
+export const bookName = (code, translation = 'saenew') =>
+  (translation === 'bsb' && englishNames.get(code)) || book(code).name;
+
+/**
+ * 구간 {b, c, from?, to?}(새번역 절 번호)에 드는 절들. 다른 역본은 절 번호가 조금 다른 장이 있어
+ * (예: 고린도후서 13장은 BSB가 14절까지) 구간이 새번역 장의 첫 절·마지막 절에서 끝나면 그 장 처음·끝까지 담는다.
+ */
+export function segmentVerses(seg, bookData) {
+  const ch = bookData.chapters[seg.c - 1];
+  if (!ch) return [];
+  if (seg.from == null) return ch.verses;
+  const nums = verseNumbers(book(seg.b).chapters[seg.c - 1]);
+  const lo = seg.from === nums[0] ? -Infinity : seg.from;
+  const hi = seg.to === nums.at(-1) ? Infinity : seg.to;
+  return ch.verses.filter((v) => v.v >= lo && v.v <= hi);
 }
 
 export const chapterUnit = (code) => (code === 'psa' ? '편' : '장');
@@ -180,9 +222,11 @@ function follows(p, x) {
  *   시 23:1           → "주님은 나의 목자시니, 내게 부족함 없어라. - 시편 23:1"
  *   마 5:3, 5:4, 5:9  → "… … … … - 마태복음서 5:3-4, 9"
  *   시 23:1, 요 3:16  → "… … … - 시편 23:1; 요한복음서 3:16"
+ * BSB 본문이면 책 이름을 영어로 쓰고 끝에 " (BSB)"를 붙인다: "The LORD is my shepherd; … - Psalm 23:1 (BSB)"
  * @param {Array<{b, c, v, e?, t}>} verses 순서는 상관없다 (성경 순서로 정렬한다)
+ * @param {{translation?: 'saenew'|'bsb'}} [opts]
  */
-export function shareText(verses) {
+export function shareText(verses, { translation = 'saenew' } = {}) {
   const sorted = [...verses].sort((x, y) => book(x.b).order - book(y.b).order || x.c - y.c || x.v - y.v);
   const runs = [];
   for (const x of sorted) {
@@ -201,9 +245,9 @@ export function shareText(verses) {
     const sameChapter = sameBook && last.c === a.c;
     const start = sameChapter ? `${a.v}` : `${a.c}:${a.v}`;
     const tail = a.c !== z.c ? `-${z.c}:${end}` : end !== a.v ? `-${end}` : '';
-    ref += (last ? (sameChapter ? ', ' : '; ') : '') + (sameBook ? '' : `${book(a.b).name} `) + start + tail;
+    ref += (last ? (sameChapter ? ', ' : '; ') : '') + (sameBook ? '' : `${bookName(a.b, translation)} `) + start + tail;
     last = z;
   }
   const text = runs.map((run) => run.map((x) => x.t).join(' ')).join(' … ');
-  return `${text} - ${ref}`;
+  return `${text} - ${ref}${translation === 'saenew' ? '' : ` (${TRANSLATIONS[translation].name})`}`;
 }
