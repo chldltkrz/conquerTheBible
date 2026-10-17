@@ -69,6 +69,10 @@
     <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png" />
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
     <link rel="stylesheet" href="css/app.css" />
+    <!-- 앱을 띄우는 데 꼭 필요한 큰 파일은 스크립트를 기다리지 않고 바로 받기 시작한다 (첫 화면이 빨리 뜨도록).
+         db.js·bible.js의 fetch와 같은 방식(CORS, 같은 출처 쿠키)이어야 다시 받지 않으므로 crossorigin을 붙인다. -->
+    <link rel="preload" href="vendor/sql-wasm-browser.wasm" as="fetch" crossorigin />
+    <link rel="preload" href="data/index.json" as="fetch" crossorigin />
     <noscript><style>.boot-msg { display: none; }</style></noscript>
     <script src="vendor/sql-wasm-browser.js" defer></script>
     <script type="module" src="js/main.js"></script>

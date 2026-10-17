@@ -204,6 +204,11 @@ test/                 node:test 테스트
   자바스크립트를 실행하지 않는 검색 로봇도 내용을 읽습니다.
 - `app/robots.txt`는 `/api/`만 막고 `sitemap.xml`을 알려 줍니다. 화면을 그리는 데 필요한 `js/`, `data/`, `vendor/`는 막지 않습니다.
 - 링크 미리보기 그림(`icons/og-image.png`, 1200×630)과 `favicon.ico`는 `npm run icons`로 만듭니다.
+- 첫 화면이 빨리 뜨도록 `index.html`에서 sql.js wasm과 `data/index.json`을 `<link rel="preload">`로 미리 받고,
+  nginx가 wasm도 gzip으로 압축해 보냅니다(658KB → 약 330KB).
+- 서버의 공통 nginx 헤더(`/etc/nginx/header.conf`)에는 `X-Robots-Tag: noindex, nofollow`가 있어 그대로 두면
+  검색에 전혀 나오지 않습니다. 이 사이트의 server 블록에서 보안 헤더를 다시 붙여 이를 덮어씁니다(아래 [배포](#배포)).
+  배포한 뒤 `curl -sI https://delicious-manna.com/ | grep -i x-robots`가 아무것도 내놓지 않아야 합니다.
 - 주소 `https://delicious-manna.com/`이 `index.html`(canonical, og:url, og:image, JSON-LD), `robots.txt`, `sitemap.xml`에
   적혀 있으므로 도메인을 바꾸면 함께 고칩니다.
 - 검색 등록: [Google Search Console](https://search.google.com/search-console)과
@@ -228,7 +233,8 @@ nginx -t && systemctl reload nginx
 curl -s https://delicious-manna.com/api/sync/health   # {"ok":true}
 ```
 
-nginx 설정(`/etc/nginx/conf.d/delicious-manna.com.conf`)에는 `/api/`를 넘기는 곳과 요청 수 제한이 있어야 합니다.
+nginx 설정(`/etc/nginx/conf.d/delicious-manna.com.conf`)에는 검색 로봇을 막지 않는 보안 헤더, wasm 압축,
+`/api/`를 넘기는 곳과 요청 수 제한이 있어야 합니다.
 
 ```nginx
 # server 블록 밖 (http 단계)
@@ -236,6 +242,19 @@ limit_req_zone $binary_remote_addr zone=ctb_sync:10m rate=60r/m;
 limit_req_zone $binary_remote_addr zone=ctb_sync_new:10m rate=2r/m;
 
 # delicious-manna.com server 블록 안
+# header.conf의 X-Robots-Tag(noindex, nofollow)만 빼고 다시 붙인다. server에 add_header가 있으면 http 단계 것은 상속되지 않는다.
+# location 안에서는 add_header를 쓰지 않는다(쓰면 이 헤더들이 빠진다). 캐시는 expires로 정한다.
+add_header Strict-Transport-Security "max-age=15768000; includeSubDomains; preload;";
+add_header X-Permitted-Cross-Domain-Policies none always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "no-referrer" always;
+add_header X-Frame-Options "SAMEORIGIN" always;
+
+location /vendor/ {                    # 기본 gzip_types에 wasm이 없다
+    gzip_types application/javascript application/wasm;
+    expires epoch;
+    try_files $uri =404;
+}
 location /api/ {
     limit_req zone=ctb_sync burst=40 nodelay;
     limit_req_status 429;
