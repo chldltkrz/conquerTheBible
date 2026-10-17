@@ -227,6 +227,12 @@ function follows(p, x) {
  * @param {{translation?: 'saenew'|'bsb'}} [opts]
  */
 export function shareText(verses, { translation = 'saenew' } = {}) {
+  const { text, ref } = shareParts(verses, { translation });
+  return `${text} - ${ref}${translation === 'saenew' ? '' : ` (${TRANSLATIONS[translation].name})`}`;
+}
+
+/** shareText의 두 부분 {text: 말씀, ref: "시편 23:1"} (말씀 카드는 둘을 따로 그린다) */
+export function shareParts(verses, { translation = 'saenew' } = {}) {
   const sorted = [...verses].sort((x, y) => book(x.b).order - book(y.b).order || x.c - y.c || x.v - y.v);
   const runs = [];
   for (const x of sorted) {
@@ -248,6 +254,5 @@ export function shareText(verses, { translation = 'saenew' } = {}) {
     ref += (last ? (sameChapter ? ', ' : '; ') : '') + (sameBook ? '' : `${bookName(a.b, translation)} `) + start + tail;
     last = z;
   }
-  const text = runs.map((run) => run.map((x) => x.t).join(' ')).join(' … ');
-  return `${text} - ${ref}${translation === 'saenew' ? '' : ` (${TRANSLATIONS[translation].name})`}`;
+  return { text: runs.map((run) => run.map((x) => x.t).join(' ')).join(' … '), ref };
 }

@@ -3,7 +3,7 @@
 import { readingMinutes } from '../bible.js';
 import { compareDate, formatDate, today, weekday, WEEKDAYS, ymKey } from '../dates.js';
 import { planOn } from '../db.js';
-import { formatNumber, html, setHTML } from '../ui.js';
+import { createSheet, formatNumber, html, setHTML } from '../ui.js';
 import {
   dayLabel,
   entryOn,
@@ -57,9 +57,7 @@ export function openStatSheet(tab = 'days') {
   if (!plan) return;
   let active = TABS.some(([id]) => id === tab) ? tab : 'days';
 
-  const dlg = document.createElement('dialog');
-  dlg.className = 'sheet';
-  dlg.setAttribute('aria-labelledby', 'sheet-title');
+  const { dlg, close } = createSheet({ labelledBy: 'sheet-title' });
 
   const render = () => {
     setHTML(
@@ -92,20 +90,7 @@ export function openStatSheet(tab = 'days') {
     }
   };
 
-  const close = () => {
-    if (!dlg.open || dlg.classList.contains('is-closing')) return;
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return dlg.close();
-    dlg.classList.add('is-closing');
-    dlg.addEventListener('animationend', () => dlg.close(), { once: true });
-    setTimeout(() => dlg.close(), 400); // 애니메이션 이벤트가 오지 않을 때를 위해
-  };
-  // 날짜·링크를 눌러 화면이 바뀌거나 계정을 바꾸면 닫는다.
-  const closeNow = () => dlg.close();
-  window.addEventListener('hashchange', closeNow);
-  window.addEventListener('account-changed', closeNow);
-
   dlg.addEventListener('click', (e) => {
-    if (e.target === dlg || e.target.closest('[data-close]')) return close(); // 바깥(어두운 곳)이나 닫기 버튼
     const tabBtn = e.target.closest('[data-tab]');
     if (tabBtn && tabBtn.dataset.tab !== active) {
       active = tabBtn.dataset.tab;
@@ -117,39 +102,6 @@ export function openStatSheet(tab = 'days') {
       close();
       document.getElementById('missed')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-  });
-  dlg.addEventListener('cancel', (e) => {
-    e.preventDefault(); // Esc: 애니메이션과 함께 닫는다
-    close();
-  });
-  dlg.addEventListener('close', () => {
-    window.removeEventListener('hashchange', closeNow);
-    window.removeEventListener('account-changed', closeNow);
-    dlg.remove();
-  });
-
-  // 머리 부분을 아래로 끌어내리면 닫는다.
-  let startY = null;
-  dlg.addEventListener(
-    'touchstart',
-    (e) => {
-      startY = e.target.closest('.sheet-head') && !e.target.closest('button') ? e.touches[0].clientY : null;
-    },
-    { passive: true },
-  );
-  dlg.addEventListener(
-    'touchmove',
-    (e) => {
-      if (startY != null) dlg.style.transform = `translateY(${Math.max(0, e.touches[0].clientY - startY)}px)`;
-    },
-    { passive: true },
-  );
-  dlg.addEventListener('touchend', (e) => {
-    if (startY == null) return;
-    const dy = e.changedTouches[0].clientY - startY;
-    startY = null;
-    if (dy > 90) return dlg.close();
-    dlg.style.transform = '';
   });
 
   render();

@@ -51,6 +51,65 @@ export function toast(message) {
   toastTimer = setTimeout(() => el.classList.remove('show'), 2400);
 }
 
+/**
+ * 아래에서 올라오는 창(.sheet)을 만든다 → {dlg, close}. 내용을 채운 뒤 document.body에 붙이고 showModal()한다.
+ * 바깥(어두운 곳)이나 data-close 버튼, Esc로 애니메이션과 함께 닫히고, 머리(.sheet-head)를 아래로 끌어내려도 닫힌다.
+ * 다른 화면으로 가거나 계정을 바꾸면 바로 닫는다. 닫히면 문서에서 지운다.
+ */
+export function createSheet({ labelledBy } = {}) {
+  const dlg = document.createElement('dialog');
+  dlg.className = 'sheet';
+  if (labelledBy) dlg.setAttribute('aria-labelledby', labelledBy);
+
+  const close = () => {
+    if (!dlg.open || dlg.classList.contains('is-closing')) return;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return dlg.close();
+    dlg.classList.add('is-closing');
+    dlg.addEventListener('animationend', () => dlg.close(), { once: true });
+    setTimeout(() => dlg.close(), 400); // 애니메이션 이벤트가 오지 않을 때를 위해
+  };
+  const closeNow = () => dlg.close();
+  window.addEventListener('hashchange', closeNow);
+  window.addEventListener('account-changed', closeNow);
+
+  dlg.addEventListener('click', (e) => {
+    if (e.target === dlg || e.target.closest('[data-close]')) close();
+  });
+  dlg.addEventListener('cancel', (e) => {
+    e.preventDefault(); // Esc: 애니메이션과 함께 닫는다
+    close();
+  });
+  dlg.addEventListener('close', () => {
+    window.removeEventListener('hashchange', closeNow);
+    window.removeEventListener('account-changed', closeNow);
+    dlg.remove();
+  });
+
+  let startY = null;
+  dlg.addEventListener(
+    'touchstart',
+    (e) => {
+      startY = e.target.closest('.sheet-head') && !e.target.closest('button') ? e.touches[0].clientY : null;
+    },
+    { passive: true },
+  );
+  dlg.addEventListener(
+    'touchmove',
+    (e) => {
+      if (startY != null) dlg.style.transform = `translateY(${Math.max(0, e.touches[0].clientY - startY)}px)`;
+    },
+    { passive: true },
+  );
+  dlg.addEventListener('touchend', (e) => {
+    if (startY == null) return;
+    const dy = e.changedTouches[0].clientY - startY;
+    startY = null;
+    if (dy > 90) return dlg.close();
+    dlg.style.transform = '';
+  });
+  return { dlg, close };
+}
+
 /** 확인 대화상자. 확인을 누르면 true. */
 export function confirmDialog({ title, message, confirmText = '확인', danger = false }) {
   return new Promise((resolve) => {

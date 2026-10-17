@@ -3854,6 +3854,108 @@ a.mc-cell:active {
   color: var(--danger);
 }
 
+/* ── 말씀 공유 창 (말씀 카드) ─────────────────────────── */
+.card-preview {
+  display: flex;
+  justify-content: center;
+  padding-bottom: 16px;
+}
+
+/* 캔버스는 1080 크기로 그리고 화면에서는 줄여 보여 준다 (가로·세로 비율은 캔버스 크기를 따른다) */
+.card-preview canvas {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: min(36vh, 300px);
+  border-radius: 14px;
+  background: var(--surface-2);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
+}
+
+.card-preview[data-ratio='story'] canvas {
+  height: min(48vh, 420px);
+}
+
+/* 배경 그림을 받는 동안 */
+.card-preview.is-loading canvas {
+  opacity: 0.55;
+}
+
+.card-options {
+  padding-top: 12px;
+  padding-bottom: 4px;
+}
+
+.card-bg {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.card-bg-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-bg-head small {
+  font-size: 13px;
+}
+
+/* 옆으로 넘기는 배경 줄 */
+.card-bg-strip {
+  display: flex;
+  gap: 8px;
+  margin: 10px -16px 0;
+  padding: 4px 16px 8px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+}
+
+.card-bg-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.card-thumb {
+  flex: none;
+  width: 54px;
+  height: 96px;
+  padding: 0;
+  border: 1px solid rgb(0 0 0 / 10%);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-2);
+  cursor: pointer;
+  scroll-snap-align: start;
+}
+
+.card-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.card-thumb[aria-checked='true'] {
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 4px var(--accent);
+}
+
+.card-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* 이미지 공유가 되는 기기: 공유는 한 줄 전체, 저장·복사는 나란히 */
+.card-actions .btn-primary:first-child:nth-last-child(3) {
+  grid-column: 1 / -1;
+}
+
 /* ── 대화상자·토스트 ──────────────────────────────────── */
 .dialog {
   width: min(92vw, 380px);

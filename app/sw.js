@@ -1,11 +1,13 @@
 // 서비스 워커: 앱 화면과 성경 본문을 캐시해 오프라인에서도 열리게 한다.
 //   앱 파일·index.json  → 네트워크 우선 (온라인이면 항상 최신), 실패하면 캐시
 //   성경 본문(books/*.json, bsb/books/*.json) → 캐시 우선 (본문은 바뀌지 않는다)
+//   말씀 카드 배경 그림(img/cards/*.webp) → 캐시 우선 (목록 index.json은 네트워크 우선)
 //   동기화 서버(api/) → 손대지 않는다 (늘 서버로)
 // 읽기 알림(js/reminder.js, server/push.mjs)이 보낸 푸시를 알림으로 띄우는 것도 여기서 한다.
 
-const SHELL_CACHE = 'shell-v7';
+const SHELL_CACHE = 'shell-v8';
 const DATA_CACHE = 'bible-data-v1'; // js/views/settings.js와 같은 이름
+const IMAGE_CACHE = 'card-images-v1'; // 배경 그림을 같은 이름으로 다시 만들면(scripts/backgrounds.mjs --redo) 올린다
 
 const SHELL_FILES = [
   './',
@@ -35,6 +37,8 @@ const SHELL_FILES = [
   'js/sync.js',
   'js/reminder.js',
   'js/views/remindersection.js',
+  'js/views/cardsheet.js',
+  'js/card.js',
   'js/verses.js',
   'js/tts.js',
   'js/analytics.js',
@@ -61,7 +65,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== SHELL_CACHE && k !== DATA_CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => ![SHELL_CACHE, DATA_CACHE, IMAGE_CACHE].includes(k)).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -73,14 +77,16 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith(new URL('api/', self.registration.scope).pathname)) return;
 
   if (/\/data\/(?:bsb\/)?books\/[^/]+\.json$/.test(url.pathname)) {
-    event.respondWith(cacheFirst(request));
+    event.respondWith(cacheFirst(request, DATA_CACHE));
+  } else if (/\/img\/cards\/.+\.webp$/.test(url.pathname)) {
+    event.respondWith(cacheFirst(request, IMAGE_CACHE));
   } else {
     event.respondWith(networkFirst(request));
   }
 });
 
-async function cacheFirst(request) {
-  const cache = await caches.open(DATA_CACHE);
+async function cacheFirst(request, name) {
+  const cache = await caches.open(name);
   const hit = await cache.match(request);
   if (hit) return hit;
   const res = await fetch(request);

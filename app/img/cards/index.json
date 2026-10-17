@@ -1,0 +1,311 @@
+{
+  "themes": [
+    {
+      "id": "pasture",
+      "label": "초장",
+      "keywords": [
+        "목자",
+        "양을",
+        "양이",
+        "양의",
+        "양들",
+        "양 떼",
+        "양떼",
+        "초장",
+        "풀밭",
+        "푸른 풀",
+        "쉴 만한",
+        "shepherd",
+        "sheep",
+        "flock",
+        "pasture",
+        "lamb"
+      ],
+      "backgrounds": [
+        "pasture-1",
+        "pasture-2",
+        "pasture-3",
+        "pasture-4",
+        "pasture-5"
+      ]
+    },
+    {
+      "id": "light",
+      "label": "빛",
+      "keywords": [
+        "빛",
+        "등불",
+        "비추",
+        "비치",
+        "밝",
+        "아침",
+        "새벽",
+        "햇빛",
+        "해가",
+        "light",
+        "lamp",
+        "shine",
+        "morning",
+        "dawn",
+        "sun"
+      ],
+      "backgrounds": [
+        "light-1",
+        "light-2",
+        "light-3",
+        "light-4",
+        "light-5"
+      ]
+    },
+    {
+      "id": "water",
+      "label": "물가",
+      "keywords": [
+        "물가",
+        "물이",
+        "물을",
+        "물로",
+        "물에",
+        "강물",
+        "강가",
+        "샘",
+        "시내",
+        "시냇",
+        "생수",
+        "목마르",
+        "목말라",
+        "water",
+        "river",
+        "spring",
+        "stream",
+        "thirst"
+      ],
+      "backgrounds": [
+        "water-1",
+        "water-2",
+        "water-3",
+        "water-4"
+      ]
+    },
+    {
+      "id": "mountain",
+      "label": "산과 반석",
+      "keywords": [
+        "산이",
+        "산에",
+        "산을",
+        "산들",
+        "산과",
+        "산으로",
+        "반석",
+        "바위",
+        "요새",
+        "산성",
+        "피난처",
+        "방패",
+        "mountain",
+        "hill",
+        "rock",
+        "fortress",
+        "refuge",
+        "shield",
+        "stronghold"
+      ],
+      "backgrounds": [
+        "mountain-1",
+        "mountain-2",
+        "mountain-3",
+        "mountain-4"
+      ]
+    },
+    {
+      "id": "path",
+      "label": "길",
+      "keywords": [
+        "길",
+        "걸음",
+        "발걸음",
+        "발길",
+        "인도",
+        "따르",
+        "path",
+        "way",
+        "walk",
+        "step",
+        "lead",
+        "guide",
+        "follow"
+      ],
+      "backgrounds": [
+        "path-1",
+        "path-2",
+        "path-3",
+        "path-4"
+      ]
+    },
+    {
+      "id": "sea",
+      "label": "바다",
+      "keywords": [
+        "바다",
+        "바닷",
+        "물결",
+        "풍랑",
+        "파도",
+        "배를",
+        "배가",
+        "배에",
+        "호수",
+        "sea",
+        "wave",
+        "storm",
+        "boat",
+        "lake"
+      ],
+      "backgrounds": [
+        "sea-1",
+        "sea-2",
+        "sea-3",
+        "sea-4"
+      ]
+    },
+    {
+      "id": "night",
+      "label": "밤하늘",
+      "keywords": [
+        "별",
+        "밤",
+        "달이",
+        "달과",
+        "star",
+        "night",
+        "moon"
+      ],
+      "backgrounds": [
+        "night-1",
+        "night-2",
+        "night-3",
+        "night-4"
+      ]
+    },
+    {
+      "id": "wilderness",
+      "label": "광야",
+      "keywords": [
+        "광야",
+        "사막",
+        "메마른",
+        "마른 땅",
+        "wilderness",
+        "desert"
+      ],
+      "backgrounds": [
+        "wilderness-1",
+        "wilderness-2",
+        "wilderness-3",
+        "wilderness-4"
+      ]
+    },
+    {
+      "id": "harvest",
+      "label": "열매와 추수",
+      "keywords": [
+        "열매",
+        "포도",
+        "씨를",
+        "씨앗",
+        "씨가",
+        "추수",
+        "거두",
+        "곡식",
+        "밀알",
+        "밭",
+        "fruit",
+        "vine",
+        "seed",
+        "harvest",
+        "grain",
+        "field"
+      ],
+      "backgrounds": [
+        "harvest-1",
+        "harvest-2",
+        "harvest-3",
+        "harvest-4"
+      ]
+    },
+    {
+      "id": "flowers",
+      "label": "들꽃",
+      "keywords": [
+        "꽃",
+        "백합",
+        "들풀",
+        "풀이",
+        "풀과",
+        "풀은",
+        "flower",
+        "lily",
+        "lilies",
+        "grass",
+        "bloom"
+      ],
+      "backgrounds": [
+        "flowers-1",
+        "flowers-2",
+        "flowers-3",
+        "flowers-4"
+      ]
+    },
+    {
+      "id": "tree",
+      "label": "나무",
+      "keywords": [
+        "나무",
+        "뿌리",
+        "감람",
+        "백향목",
+        "심은",
+        "심긴",
+        "tree",
+        "root",
+        "branch",
+        "olive",
+        "cedar"
+      ],
+      "backgrounds": [
+        "tree-1",
+        "tree-2",
+        "tree-3",
+        "tree-4"
+      ]
+    },
+    {
+      "id": "sky",
+      "label": "하늘",
+      "keywords": [
+        "독수리",
+        "날개",
+        "구름",
+        "비가",
+        "비를",
+        "단비",
+        "무지개",
+        "하늘",
+        "eagle",
+        "wing",
+        "cloud",
+        "rain",
+        "rainbow",
+        "heaven",
+        "sky"
+      ],
+      "backgrounds": [
+        "sky-1",
+        "sky-2",
+        "sky-3",
+        "sky-4"
+      ]
+    }
+  ]
+}

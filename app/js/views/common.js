@@ -1,6 +1,6 @@
 // 여러 화면에서 함께 쓰는 조각들
 
-import { book, chapterUnit, describeSelection, formatSegments, getIndex, readingMinutes, shareText } from '../bible.js';
+import { book, chapterUnit, describeSelection, formatSegments, getIndex, readingMinutes } from '../bible.js';
 import {
   addDays,
   compareDate,
@@ -27,7 +27,8 @@ import {
   setRead,
   switchAccount,
 } from '../db.js';
-import { copyText, html, josa, setHTML, toast } from '../ui.js';
+import { html, josa, setHTML, toast } from '../ui.js';
+import { openShareSheet } from './cardsheet.js';
 import { rebalanceTrack } from '../planner.js';
 import { track, trackOnce } from '../analytics.js';
 
@@ -55,11 +56,12 @@ export const checkIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path 
 export const bookmarkIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10a1 1 0 0 1 1 1v15l-6-4-6 4V5a1 1 0 0 1 1-1z" /></svg>`;
 export const shareIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3M7.5 7.5 12 3l4.5 4.5M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" /></svg>`;
 
-/** 절들을 "말씀 - 책 장:절" 형식으로 클립보드에 복사하고 알린다. translation이 'bsb'면 영어 책 이름과 (BSB)를 붙인다. */
-export async function shareVerses(verses, surface, translation = 'saenew') {
-  const ok = await copyText(shareText(verses, { translation }));
-  track('verses_shared', { surface, count: verses.length, copied: ok });
-  toast(ok ? '말씀을 클립보드에 복사했습니다' : '복사하지 못했습니다. 브라우저의 클립보드 권한을 확인해 주세요');
+/**
+ * 말씀 공유 창을 연다: 말씀 카드(이미지)로 공유·저장하거나 "말씀 - 책 장:절" 글로 복사한다.
+ * translation이 'bsb'면 영어 책 이름과 BSB를 쓴다.
+ */
+export function shareVerses(verses, surface, translation = 'saenew') {
+  openShareSheet(verses, { surface, translation });
 }
 
 // ── 계정 ───────────────────────────────────────────────────
