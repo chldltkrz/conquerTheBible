@@ -1,8 +1,9 @@
 // 서비스 워커: 앱 화면과 성경 본문을 캐시해 오프라인에서도 열리게 한다.
 //   앱 파일·index.json  → 네트워크 우선 (온라인이면 항상 최신), 실패하면 캐시
 //   성경 본문(books/*.json) → 캐시 우선 (본문은 바뀌지 않는다)
+//   동기화 서버(api/) → 손대지 않는다 (늘 서버로)
 
-const SHELL_CACHE = 'shell-v4';
+const SHELL_CACHE = 'shell-v5';
 const DATA_CACHE = 'bible-data-v1'; // js/views/settings.js와 같은 이름
 
 const SHELL_FILES = [
@@ -29,12 +30,15 @@ const SHELL_FILES = [
   'js/views/listen.js',
   'js/views/stats.js',
   'js/views/yearverse.js',
+  'js/views/syncsection.js',
+  'js/sync.js',
   'js/verses.js',
   'js/tts.js',
   'js/analytics.js',
   'vendor/sql-wasm-browser.js',
   'vendor/sql-wasm-browser.wasm',
   'vendor/posthog.js',
+  'vendor/qrcode.js',
   'icons/icon.svg',
   'icons/icon-192.png',
   'icons/icon-512.png',
@@ -63,6 +67,7 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith(new URL('api/', self.registration.scope).pathname)) return;
 
   if (/\/data\/books\/[^/]+\.json$/.test(url.pathname)) {
     event.respondWith(cacheFirst(request));

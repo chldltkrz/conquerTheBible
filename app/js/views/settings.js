@@ -6,7 +6,7 @@ import {
   currentAccount,
   deleteAccount,
   deletePlan,
-  exportFile,
+  exportBackup,
   getSetting,
   importFile,
   listAccounts,
@@ -14,6 +14,7 @@ import {
   renameAccount,
   resetAll,
   setSetting,
+  syncInfo,
 } from '../db.js';
 import { FONT_SIZE, applyReadingSettings } from '../prefs.js';
 import { confirmDialog, html, setHTML, toast } from '../ui.js';
@@ -21,6 +22,7 @@ import { avatar, isMonthPlan, periodLabel } from './common.js';
 import { koreanVoices, pickVoice, player, RATES, voicesReady } from '../tts.js';
 import { rateLabel, speakerIcon } from './listen.js';
 import { isDevHostname, isOptedOut, setOptOut, track } from '../analytics.js';
+import { handleSyncAction, syncSection } from './syncsection.js';
 
 /**
  * 개발자에게 커피 보내기: 송금 링크를 넣으면 설정 화면에 그 버튼이 생긴다. 주소가 빈 항목은 보이지 않는다.
@@ -96,6 +98,8 @@ export async function settingsView(root, _params, { isCurrent }) {
           <p class="muted small">계정마다 읽기 계획, 읽음 기록, 저장한 구절이 따로 있습니다. 이름을 누르면 고칠 수 있습니다.</p>
           <button class="btn btn-ghost" data-action="switch-account">계정 추가</button>
         </section>
+
+        ${syncSection()}
 
         <section class="block">
           <h2 class="block-title">읽기 화면</h2>
@@ -186,7 +190,10 @@ export async function settingsView(root, _params, { isCurrent }) {
         <section class="block">
           <h2 class="block-title">기록 백업</h2>
           <div class="card">
-            <p class="muted">읽기 기록은 이 기기의 브라우저 안 SQLite 데이터베이스에 저장됩니다. 다른 기기로 옮기거나 보관하려면 파일로 내보내세요.</p>
+            <p class="muted">읽기 기록은 이 기기의 브라우저 안 SQLite 데이터베이스에 저장됩니다. 보관하거나 동기화 없이 다른 기기로 옮기려면 파일로 내보내세요.</p>
+            ${syncInfo()
+              ? html`<p class="muted small">동기화 중에는 백업을 가져오거나 모든 기록을 지우면 동기화된 다른 기기의 기록도 함께 바뀝니다.</p>`
+              : ''}
             <div class="button-row">
               <button class="btn btn-ghost" data-action="export">내보내기 (.sqlite)</button>
               <label class="btn btn-ghost">
@@ -264,8 +271,8 @@ export async function settingsView(root, _params, { isCurrent }) {
     track('offline_download_completed', { total: books.length, failed });
   };
 
-  const exportBackup = () => {
-    const blob = new Blob([exportFile()], { type: 'application/vnd.sqlite3' });
+  const downloadBackup = () => {
+    const blob = new Blob([exportBackup()], { type: 'application/vnd.sqlite3' });
     const t = today();
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -285,7 +292,9 @@ export async function settingsView(root, _params, { isCurrent }) {
     const btn = e.target.closest('button');
     if (!btn) return;
     const d = btn.dataset;
-    if (d.family) {
+    if (d.syncAction) {
+      await handleSyncAction(d.syncAction, btn, render);
+    } else if (d.family) {
       await setSetting('fontFamily', d.family);
       applyReadingSettings();
       render();
@@ -303,12 +312,12 @@ export async function settingsView(root, _params, { isCurrent }) {
     } else if (d.action === 'download') {
       downloadAll(btn);
     } else if (d.action === 'export') {
-      exportBackup();
+      downloadBackup();
       track('backup_exported');
     } else if (d.action === 'reset') {
       const ok = await confirmDialog({
         title: '모든 기록을 지울까요?',
-        message: '모든 계정과 계획, 읽음 기록, 저장한 구절, 설정이 지워집니다. 되돌릴 수 없으니 필요하면 먼저 내보내기를 하세요.',
+        message: `모든 계정과 계획, 읽음 기록, 저장한 구절, 설정이 지워집니다.${syncInfo() ? ' 동기화된 다른 기기에서도 모두 지워집니다.' : ''} 되돌릴 수 없으니 필요하면 먼저 내보내기를 하세요.`,
         confirmText: '모두 지우기',
         danger: true,
       });
@@ -398,7 +407,7 @@ export async function settingsView(root, _params, { isCurrent }) {
     if (!file) return;
     const ok = await confirmDialog({
       title: '백업을 가져올까요?',
-      message: `지금 기기의 기록이 "${file.name}"의 내용으로 바뀝니다.`,
+      message: `지금 기기${syncInfo() ? '와 동기화된 다른 기기들' : ''}의 기록이 "${file.name}"의 내용으로 바뀝니다.`,
       confirmText: '가져오기',
       danger: true,
     });

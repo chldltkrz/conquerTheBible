@@ -1,0 +1,17 @@
+{
+  "name": "conquer-the-bible-sync",
+  "version": "0.1.0",
+  "private": true,
+  "description": "기기 간 동기화 서버: 동기화 코드 하나로 여러 기기의 기록을 PostgreSQL에 모아 맞춘다",
+  "type": "module",
+  "main": "sync-server.mjs",
+  "scripts": {
+    "start": "node sync-server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  }
+}

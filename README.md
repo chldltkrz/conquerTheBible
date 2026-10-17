@@ -40,6 +40,11 @@
 - **계정**: 계정마다 읽기 계획, 읽음 기록, 저장한 구절이 따로 있습니다. 한 기기에서 가족이 함께 쓰거나,
   한 사람이 "신약", "시편"처럼 여러 범위를 계정으로 나누어 번갈아 읽을 수 있습니다.
   오늘 화면에서 다른 계정의 오늘 분량과 읽음 여부를 보고 바로 바꿀 수 있습니다.
+- **기기 간 동기화**: 로그인 없이 **동기화 코드** 하나로 휴대폰·태블릿·컴퓨터의 기록을 똑같이 맞춥니다.
+  설정 > 기기 간 동기화에서 "동기화 시작하기"를 누르면 `ABCD-EFGH-JKLM` 같은 12자리 코드와 QR 코드가 나오고,
+  다른 기기에서 "코드로 연결하기"에 코드를 넣거나 QR 코드(링크)로 열면 연결됩니다. 이 기기의 모든 계정
+  (계획, 읽음 기록, 저장한 구절, 묵상 메모, 올해의 말씀)이 맞춰지고, 글자 크기·목소리·지금 계정은 기기마다 따로 둡니다.
+  인터넷이 없을 때 바꾼 것은 다시 연결되면 보냅니다. 자세한 것은 아래 [기기 간 동기화](#기기-간-동기화).
 
 사용자용 설명서(실제 화면 사진과 메뉴별 사용법, PDF 23쪽)는 [app/docs/user-manual.pdf](app/docs/user-manual.pdf)에 있고,
 앱의 **설정 > 사용설명서**에서 바로 열 수 있습니다.
@@ -49,8 +54,16 @@
 Node.js 20 이상이 필요합니다.
 
 ```sh
-npm install      # sql.js를 받아 app/vendor/로 복사
+npm install      # sql.js 등을 받아 app/vendor/로 복사
 npm start        # http://localhost:5173
+```
+
+기기 간 동기화까지 해 보려면 PostgreSQL과 동기화 서버가 필요합니다. `npm start`는 `/api/`로 오는 요청을
+`SYNC_URL`(기본 `http://127.0.0.1:5690`)로 넘깁니다.
+
+```sh
+npm install --prefix server                                   # 서버 의존성(pg)
+DATABASE_URL=postgres://사용자:암호@127.0.0.1:5432/DB이름 node server/sync-server.mjs
 ```
 
 새번역 본문 데이터(`app/data/`)는 저장소에 들어 있습니다. 다시 만들려면 `npm run crawl`을 실행합니다(약 10분).
@@ -58,15 +71,22 @@ npm start        # http://localhost:5173
 (`--build`: 캐시로 JSON만 생성, `--no-build`: 내려받기만)
 
 ```sh
-npm test         # 분배 알고리즘·파서 테스트
+npm test         # 분배 알고리즘·파서·동기화 테스트
 npm run icons    # 앱 아이콘 다시 그리기
+```
+
+동기화 테스트 중 서버와 주고받는 것은 `TEST_DATABASE_URL`(운영과 다른 PostgreSQL DB, 테스트마다 비운다)이
+있어야 돌고, 없으면 건너뜁니다. 이 서버에서는 `/etc/conquer-the-bible/sync.env`에 들어 있습니다.
+
+```sh
+set -a; . /etc/conquer-the-bible/sync.env; set +a; npm test
 ```
 
 ## 휴대폰에 설치하기
 
 서비스 워커(오프라인, 홈 화면 설치)는 `localhost`나 HTTPS에서만 동작합니다.
 `app/` 폴더가 그대로 배포할 정적 사이트이므로 GitHub Pages, Netlify, Cloudflare Pages 같은 HTTPS 정적 호스팅에 올린 뒤
-휴대폰 브라우저에서 "홈 화면에 추가"를 하면 됩니다.
+휴대폰 브라우저에서 "홈 화면에 추가"를 하면 됩니다. 다만 기기 간 동기화는 같은 주소의 `/api/`에 동기화 서버가 있어야 합니다(아래 [배포](#배포)).
 
 ## 분량을 나누는 방법
 
@@ -81,8 +101,9 @@ npm run icons    # 앱 아이콘 다시 그리기
 ## 기록 저장
 
 - [sql.js](https://sql.js.org)(WebAssembly SQLite)로 브라우저 안에서 SQLite를 돌리고, 데이터베이스 파일을 IndexedDB에 보관합니다.
-  서버가 없으므로 기록은 기기(브라우저)마다 따로 저장됩니다.
+  기록은 기기(브라우저)마다 저장되고, 기기 간 동기화를 켜면 바뀐 줄을 서버를 거쳐 다른 기기와 주고받습니다.
 - 설정 화면에서 `.sqlite` 파일로 내보내거나 가져올 수 있습니다. 내보낸 파일은 일반 SQLite 도구로 열 수 있습니다.
+  내보낸 파일에는 동기화 코드가 들어가지 않습니다. 동기화 중에 백업을 가져오거나 모든 기록을 지우면 동기화된 다른 기기도 그렇게 바뀝니다.
 
 | 테이블 | 내용 |
 | --- | --- |
@@ -94,16 +115,56 @@ npm run icons    # 앱 아이콘 다시 그리기
 | `saved_verses` | 저장한 절 (저장한 날마다 한 줄, 저장 당시 본문 포함). 계획을 지워도 남는다 |
 | `day_notes` | 날짜별 묵상 메모 (그날 읽은 범위 포함). 계획을 다시 만들어도 남는다 |
 | `verse_notes` | 저장한 구절에 단 메모 (절마다 하나) |
-| `settings` | 글자 크기, 글꼴, 지금 계정 (기기 공통) |
+| `settings` | 글자 크기, 글꼴, 지금 계정 (기기 공통), 계정마다의 올해의 말씀(`yearVerse:계정번호`) |
+| `sync_state` | 기기 간 동기화 상태: 동기화 코드, 받은 마지막 번호(cursor) 등. 동기화하지 않으면 비어 있다 |
+| `sync_outbox` | 동기화하는 동안 바뀌어 아직 보내지 않은 줄의 표 이름과 기본 키 (트리거가 적는다) |
 
 스키마 버전은 `PRAGMA user_version`으로 관리하며, 이전 버전 데이터베이스나 백업 파일은 열 때 자동으로 옮겨집니다.
+계정·계획·저장한 구절의 번호는 기기마다 따로 만들어도 겹치지 않도록 무작위(2^32 이상 2^53 미만)로 정합니다.
+예전 자동 번호(1, 2, …)는 그 기기 기록으로 동기화를 시작할 때 무작위 번호로 바꿉니다.
+
+## 기기 간 동기화
+
+로그인 대신 **동기화 코드**가 열쇠입니다. 코드를 아는 기기는 모두 같은 기록을 보고 고칩니다.
+
+- **코드**: 서버가 만들어 처음 한 번만 알려 줍니다. 헷갈리는 글자(0·O, 1·I)를 뺀 32글자로 12자리(60비트)이고,
+  서버에는 SHA-256 해시만 저장합니다. 링크(`https://…/#sync=코드`)는 코드를 `#` 뒤에 두어 서버로 가지 않고,
+  앱을 열면 주소에서 바로 지워 사용 통계에도 남지 않습니다.
+- **연결할 때**: 새 기기처럼 기록이 없으면 동기화된 기록을 받습니다. 양쪽에 기록이 있으면 어느 쪽을 남길지 묻습니다
+  ("동기화된 기록 받기" 또는 "이 기기 기록 남기기" — 고르지 않은 쪽은 지워집니다).
+- **주고받는 단위**: SQLite 줄입니다. 동기화하는 동안 트리거가 바뀐 줄의 기본 키를 `sync_outbox`에 적고,
+  보낼 때 그 줄의 지금 값(지웠으면 `null`)을 보냅니다. 서버는 줄마다 마지막 값과, 동기화 공간 안에서 1씩 커지는
+  번호를 둡니다. 기기는 받은 마지막 번호 다음부터 받아 트리거를 끈 채 덮어씁니다.
+- **언제**: 앱을 열 때, 기록을 바꾸고 1.5초 뒤, 앱으로 돌아오거나 떠날 때, 인터넷이 다시 될 때, 켜 둔 동안 1분마다.
+  받은 기록은 지금 화면에 바로 반영하되, 메모를 쓰는 중이거나 창이 열려 있거나 소리로 듣는 중이면 끝난 뒤에 다시 그립니다.
+- **어긋날 때**: 같은 줄을 두 기기가 고치면 서버에 나중에 도착한 쪽이 이깁니다. 아직 보내지 않은 이 기기의 변경은
+  받은 값보다 앞섭니다. 같은 날 같은 구절을 두 기기에서 저장하면 하나만 남기고, 같은 계정에 기간이 겹치는 계획을
+  두 기기에서 따로 만들면 나중에 만든 계획을 남기며 같은 날짜·범위의 읽음 기록은 그 계획으로 옮깁니다.
+  지워진 계획에 읽음 표시한 것처럼 부모가 없는 줄은 버립니다.
+- **끄기**: "이 기기만 끄기"는 이 기기의 동기화만 멈춥니다. "모든 기기에서 끄기"는 서버 기록을 지우고,
+  다른 기기들도 다음 동기화에서 멈춥니다. 어느 쪽이든 기기에 있던 기록은 남습니다.
+
+### 동기화 서버
+
+`server/sync-server.mjs` (Node + [pg](https://node-postgres.com), PostgreSQL 15). 표 이름·키·값(JSON)만 다루고 내용은 해석하지 않습니다.
+시작할 때 표를 만듭니다(`sync_spaces`: 코드 해시와 마지막 번호, `sync_rows`: 줄마다 마지막 값과 번호).
+
+| 요청 | 내용 |
+| --- | --- |
+| `POST /api/sync/spaces` | 새 동기화 공간 → `{code}` |
+| `GET /api/sync/space` | 공간 요약 (연결하기 전에 보여 줄 계정 이름, 표마다 줄 수) |
+| `DELETE /api/sync/space` | 공간과 기록을 모두 지운다 ("모든 기기에서 끄기") |
+| `POST /api/sync` | `{v: 1, cursor, replace?, changes: [{t, k, d}]}` → `{cursor, more, rows: [{t, k, d}]}`. 보낸 줄을 저장하고 cursor 다음부터 바뀐 줄을 돌려준다(한 번에 5천 줄까지, `more`면 이어서) |
+| `GET /api/sync/health` | 서버·DB 확인 |
+
+공간을 쓰는 요청은 `Authorization: Bearer <코드>` 헤더로 코드를 보냅니다. 요청 하나는 4MB, 공간 하나는 50만 줄(지운 줄 포함)까지입니다.
 
 ## 사용 통계
 
 - 어떤 기능을 얼마나 쓰는지 [PostHog](https://posthog.com)로 익명 이벤트를 보냅니다 (앱 열기, 화면 이동, 읽음 표시, 계획 만들기 등).
   PostHog는 `app/vendor/posthog.js`(no-external 빌드)로 함께 배포되며, 실행 중에 추가 스크립트를 받아오지 않습니다.
-- 보내지 않는 것: 계정 이름, 계획 이름, 묵상 메모·구절 메모 내용, 절 본문, 검색어, 백업 파일 이름, 음성 이름.
-  책 코드(`gen`, `psa` 등), 개수, 날짜 차이, 참/거짓, 기기 안의 계정 번호만 보냅니다.
+- 보내지 않는 것: 계정 이름, 계획 이름, 묵상 메모·구절 메모 내용, 절 본문, 검색어, 백업 파일 이름, 음성 이름, 동기화 코드.
+  책 코드(`gen`, `psa` 등), 개수, 날짜 차이, 참/거짓, 기기 안에서 몇 번째 계정인지만 보냅니다.
 - 설정 화면의 "익명 사용 통계 보내기"를 끄면 아무것도 보내지 않습니다.
 - localhost, 사설 IP, `.test`·`.local` 같은 테스트 도메인(예: `ctb.test`)에서 열면 보내지 않고 브라우저 콘솔에 `[analytics]`로만 출력합니다 (콘솔 수준 "Verbose"에서 보임).
 - PostHog 프로젝트 키와 서버 주소는 `app/js/analytics.js` 맨 위의 `POSTHOG_KEY`, `POSTHOG_HOST`에 있습니다.
@@ -114,15 +175,58 @@ npm run icons    # 앱 아이콘 다시 그리기
 app/                  배포할 정적 사이트 (PWA)
   index.html, sw.js, manifest.webmanifest
   js/planner.js       분량 나누기 (DOM 없는 순수 모듈)
-  js/db.js            SQLite 스키마와 질의
+  js/db.js            SQLite 스키마와 질의, 동기화할 줄 모으기·받은 줄 넣기
+  js/sync.js          기기 간 동기화: 서버와 주고받기, 언제 할지
   js/bible.js         본문 불러오기, 구절 표기
   js/views/           화면 (오늘, 달력, 구절, 새 계획, 본문, 설정)
   data/               크롤링한 새번역 본문 (index.json + books/*.json)
   docs/user-manual.pdf 사용설명서 (설정 화면에서 연다)
+server/
+  sync-server.mjs     기기 간 동기화 서버 (PostgreSQL)
+  conquer-the-bible-sync.service  systemd 서비스
 scripts/
   crawl.mjs           새번역 크롤러, lib/parse.mjs 파서
   serve.mjs           개발용 정적 서버
 test/                 node:test 테스트
+```
+
+## 배포
+
+https://delicious-manna.com 은 nginx가 정적 파일(`/var/www/conquer-the-bible/html`)을 내보내고,
+`/api/`는 동기화 서버(`127.0.0.1:5690`, systemd `conquer-the-bible-sync`)로 넘깁니다.
+DB는 같은 서버의 PostgreSQL(`ctb_sync`)이고 접속 정보는 `/etc/conquer-the-bible/sync.env`(root만 읽음)에 있습니다.
+
+```sh
+# 앱
+rsync -a --delete --chown=www-data:www-data app/ /var/www/conquer-the-bible/html/
+# 동기화 서버
+rsync -a --delete --exclude node_modules server/ /opt/conquer-the-bible/sync/
+npm ci --omit=dev --prefix /opt/conquer-the-bible/sync
+cp server/conquer-the-bible-sync.service /etc/systemd/system/ && systemctl daemon-reload
+systemctl enable conquer-the-bible-sync && systemctl restart conquer-the-bible-sync
+nginx -t && systemctl reload nginx
+curl -s https://delicious-manna.com/api/sync/health   # {"ok":true}
+```
+
+nginx 설정(`/etc/nginx/conf.d/delicious-manna.com.conf`)에는 `/api/`를 넘기는 곳과 요청 수 제한이 있어야 합니다.
+
+```nginx
+# server 블록 밖 (http 단계)
+limit_req_zone $binary_remote_addr zone=ctb_sync:10m rate=60r/m;
+limit_req_zone $binary_remote_addr zone=ctb_sync_new:10m rate=2r/m;
+
+# delicious-manna.com server 블록 안
+location /api/ {
+    limit_req zone=ctb_sync burst=40 nodelay;
+    limit_req_status 429;
+    client_max_body_size 4m;
+    proxy_pass http://127.0.0.1:5690;
+}
+location = /api/sync/spaces {          # 새 코드 만들기는 더 적게
+    limit_req zone=ctb_sync_new burst=5 nodelay;
+    limit_req_status 429;
+    proxy_pass http://127.0.0.1:5690;
+}
 ```
 
 ## 저작권

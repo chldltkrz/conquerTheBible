@@ -76,6 +76,38 @@ export function confirmDialog({ title, message, confirmText = '확인', danger =
   });
 }
 
+/**
+ * 여러 가지 중 하나를 고르는 대화상자. 고른 것의 value, 취소하면 null.
+ * @param {{title, message?, choices: Array<{value, label, detail?, danger?}>}} options
+ */
+export function choiceDialog({ title, message, choices }) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'dialog choice-dialog';
+    setHTML(
+      dlg,
+      html`<form method="dialog">
+        <h2>${title}</h2>
+        ${message ? html`<p>${message}</p>` : ''}
+        <div class="choice-list">
+          ${choices.map(
+            (c) => html`<button value="${c.value}" class="choice ${c.danger ? 'is-danger' : ''}">
+              <b>${c.label}</b>${c.detail ? html`<small>${c.detail}</small>` : ''}
+            </button>`,
+          )}
+        </div>
+        <div class="dialog-actions"><button value="" class="btn btn-ghost">취소</button></div>
+      </form>`,
+    );
+    dlg.addEventListener('close', () => {
+      resolve(dlg.returnValue || null);
+      dlg.remove();
+    });
+    document.body.append(dlg);
+    dlg.showModal();
+  });
+}
+
 export const formatNumber = (n) => n.toLocaleString('ko-KR');
 
 /** 클립보드에 복사한다. 성공하면 true */

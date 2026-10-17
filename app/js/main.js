@@ -2,7 +2,7 @@ import { openDatabase } from './db.js';
 import { loadIndex } from './bible.js';
 import { applyReadingSettings } from './prefs.js';
 import { today, ymKey } from './dates.js';
-import { html, setHTML } from './ui.js';
+import { html, setHTML, toast } from './ui.js';
 import { todayView } from './views/today.js';
 import { calendarView } from './views/calendar.js';
 import { newPlanView } from './views/newplan.js';
@@ -14,6 +14,8 @@ import { searchView } from './views/search.js';
 import { changeAccount, openAccountSwitcher, openedProps } from './views/common.js';
 import { player } from './tts.js';
 import { initAnalytics, track } from './analytics.js';
+import { initSync, takeSyncLinkCode } from './sync.js';
+import { openJoinDialog } from './views/syncsection.js';
 
 const main = document.getElementById('main');
 
@@ -37,7 +39,8 @@ const routes = [
 
 let renderSeq = 0;
 
-async function route() {
+/** refresh: 다른 기기에서 받은 기록으로 지금 화면을 다시 그린다 (사용 통계·스크롤·소리로 듣기는 그대로) */
+async function route({ refresh = false } = {}) {
   const hash = location.hash || '#/';
   const match = routes.map((r) => ({ r, m: r.re.exec(hash) })).find((x) => x.m);
   if (!match) {
@@ -45,7 +48,7 @@ async function route() {
     return;
   }
   const seq = ++renderSeq;
-  track('$pageview', { screen: match.r.screen });
+  if (!refresh) track('$pageview', { screen: match.r.screen });
   document.querySelectorAll('.tabbar a').forEach((a) => {
     a.toggleAttribute('aria-current', a.dataset.tab === match.r.tab);
     if (a.dataset.tab === 'month') {
@@ -56,14 +59,18 @@ async function route() {
   const params = match.m.slice(1).map((x) => (x == null ? undefined : Number(x)));
   // 화면들은 main에 이벤트 핸들러 속성(onclick 등)을 직접 단다. 이전 화면 것을 지운다.
   main.onclick = main.oninput = main.onchange = main.onsubmit = main.onkeydown = null;
-  player?.stop(); // 소리로 듣던 것은 화면을 옮기면 멈춘다
-
-  window.scrollTo(0, 0);
+  const scrollY = window.scrollY;
+  if (!refresh) {
+    player?.stop(); // 소리로 듣던 것은 화면을 옮기면 멈춘다
+    window.scrollTo(0, 0);
+  }
   try {
     // 화면마다 main 영역을 통째로 다시 그린다. 이전 화면의 비동기 작업이 늦게 끝나도
     // 덮어쓰지 않도록 isCurrent()로 확인할 수 있게 한다.
     await match.r.view(main, params, { isCurrent: () => seq === renderSeq });
-    if (seq === renderSeq) main.focus({ preventScroll: true });
+    if (seq !== renderSeq) return;
+    if (refresh) window.scrollTo(0, scrollY);
+    else main.focus({ preventScroll: true });
   } catch (err) {
     console.error(err);
     track('app_error', { where: 'route', screen: match.r.screen, message: String(err?.message ?? err).slice(0, 120) });
@@ -82,7 +89,27 @@ function showError(err) {
   );
 }
 
+// 다른 기기에서 받은 기록은 지금 화면에 바로 반영하되, 쓰던 글·열린 창·소리로 듣기를 방해하지 않도록
+// 그동안은 미뤘다가 끝나면 다시 그린다.
+let staleView = false;
+
+function refreshView() {
+  const el = document.activeElement;
+  const typing = el?.matches?.('textarea, input:not([type=checkbox], [type=radio], [type=range], [type=file]), select');
+  const listening = player?.playing || document.querySelector('#tts-bar:not([hidden])');
+  if (typing || listening || document.querySelector('dialog[open]')) {
+    staleView = true;
+    return;
+  }
+  staleView = false;
+  route({ refresh: true });
+}
+
+const refreshIfStale = () => staleView && setTimeout(refreshView, 0);
+
 async function boot() {
+  // 동기화 링크(#sync=코드)로 열었으면 코드를 꺼내고 주소에서 지운다. 사용 통계에 주소가 남기 전에 한다.
+  const linkCode = takeSyncLinkCode();
   initAnalytics();
   try {
     await Promise.all([openDatabase(), loadIndex()]);
@@ -101,11 +128,21 @@ async function boot() {
   }
   applyReadingSettings();
   document.body.classList.remove('booting');
-  window.addEventListener('hashchange', route);
-  window.addEventListener('account-changed', route);
+  window.addEventListener('hashchange', () => route());
+  window.addEventListener('account-changed', () => route());
+  window.addEventListener('sync-applied', refreshView);
+  window.addEventListener('sync-status', refreshIfStale);
+  document.addEventListener('focusout', refreshIfStale);
+  document.addEventListener('close', refreshIfStale, true); // 창(dialog)을 닫으면
+  window.addEventListener('sync-ended', () => {
+    toast('다른 기기에서 동기화를 꺼서 이 기기도 멈췄습니다. 기록은 그대로 있습니다');
+    refreshView();
+  });
   track('app_opened', () => ({ launch: 'cold', ...openedProps() }));
   window.addEventListener('appinstalled', () => track('pwa_installed'));
-  route();
+  const firstRender = route();
+  initSync();
+  if (linkCode != null) firstRender.then(() => openJoinDialog(linkCode, () => route({ refresh: true })));
 
   // 어느 화면에서든: 계정 칩을 누르면 계정 창, data-switch-to 버튼은 그 계정으로 바로 바꾼다.
   document.addEventListener('click', (e) => {

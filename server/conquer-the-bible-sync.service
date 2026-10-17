@@ -1,0 +1,29 @@
+# 한 달 성경 읽기 — 기기 간 동기화 서버 (README의 "배포" 참고)
+#   설치: cp server/conquer-the-bible-sync.service /etc/systemd/system/
+#         systemctl daemon-reload && systemctl enable --now conquer-the-bible-sync
+#   로그: journalctl -u conquer-the-bible-sync
+[Unit]
+Description=Conquer the Bible sync server
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+# DATABASE_URL (root만 읽을 수 있는 파일, systemd가 읽어 넘긴다)
+EnvironmentFile=/etc/conquer-the-bible/sync.env
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=5690
+WorkingDirectory=/opt/conquer-the-bible/sync
+ExecStart=/usr/local/bin/node sync-server.mjs
+Restart=always
+RestartSec=3
+# 쓰고 버리는 계정으로 돌리고, 파일 시스템은 읽기만 한다
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

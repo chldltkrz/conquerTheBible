@@ -1,6 +1,7 @@
 // 읽기 계획과 기록 저장소: 브라우저 안에서 도는 SQLite(sql.js).
 // 데이터베이스 파일 전체를 IndexedDB에 보관하고, 바뀔 때마다 다시 저장한다.
 // 계획·읽음 기록·저장한 구절은 계정마다 따로 두고, 화면 설정은 기기 공통이다.
+// 기기 간 동기화를 켜면 바뀐 줄을 다른 기기와 주고받는다 (아래 '동기화').
 /* global initSqlJs */
 
 import { addDays, daysBetween, fromISO, localTimestamp, toISO } from './dates.js';
@@ -10,6 +11,54 @@ const IDB_STORE = 'files';
 const IDB_KEY = 'records.sqlite';
 
 export const ACCOUNT_COLORS = ['#2f6a55', '#3b64b0', '#b0532a', '#7a4fa3', '#a3476b', '#2f7f8f', '#8a6d1f'];
+
+/**
+ * 새 계정·계획·저장한 구절의 번호. 동기화하는 기기들이 따로 만들어도 겹치지 않도록 무작위로 고른다.
+ * 2^32 이상이라 예전 자동 번호(1, 2, …)와 겹치지 않고, 2^53보다 작아 JS 숫자로 정확히 다룬다.
+ */
+export function newId() {
+  const [hi, lo] = crypto.getRandomValues(new Uint32Array(2));
+  return ((hi % (2 ** 21 - 1)) + 1) * 2 ** 32 + lo;
+}
+const SMALL_ID = 2 ** 32;
+
+/**
+ * 동기화하는 표와 기본 키. 이 순서대로(부모 표부터) 넣는다.
+ * only: 그 조건에 맞는 줄만 동기화한다 (x는 표 이름 또는 트리거의 NEW/OLD)
+ * v6 마이그레이션이 이 목록으로 트리거를 만든다. 표를 더하면 새 마이그레이션에서 그 표의 트리거를 만든다.
+ */
+export const SYNC_TABLES = [
+  { name: 'accounts', key: ['id'] },
+  { name: 'plans', key: ['id'] },
+  { name: 'plan_tracks', key: ['plan_id', 'track'] },
+  { name: 'plan_days', key: ['plan_id', 'track', 'day'] },
+  { name: 'readings', key: ['plan_id', 'track', 'day'] },
+  { name: 'saved_verses', key: ['id'] },
+  { name: 'day_notes', key: ['account_id', 'date'] },
+  { name: 'verse_notes', key: ['account_id', 'book', 'chapter', 'verse'] },
+  // 설정 중에서는 계정마다 두는 올해의 말씀만 맞춘다. 글자 크기·목소리·지금 계정은 기기마다 따로 둔다.
+  { name: 'settings', key: ['key'], only: (x) => `${x}.key LIKE 'yearVerse:%'` },
+];
+
+/** 동기화하는 동안 바뀐 줄의 열쇠를 sync_outbox에 적는 트리거 */
+function syncTriggers() {
+  const tracking = "EXISTS (SELECT 1 FROM sync_state WHERE key = 'tracking')";
+  return SYNC_TABLES.map(({ name, key, only }) => {
+    const record = (x, cond) => {
+      const values = key.map((k) => `${x}.${k}`).join(', ');
+      const where = [only?.(x), cond].filter(Boolean).join(' AND ');
+      return `INSERT INTO sync_outbox (tbl, key) SELECT '${name}', json_array(${values})${where ? ` WHERE ${where}` : ''};`;
+    };
+    // 열쇠가 바뀐 경우에만 옛 열쇠도 적는다
+    const keyChanged = `(${key.map((k) => `OLD.${k} IS NOT NEW.${k}`).join(' OR ')})`;
+    const trigger = (event, body) =>
+      `CREATE TRIGGER sync_${name}_${event.toLowerCase()} AFTER ${event} ON ${name} WHEN ${tracking} BEGIN ${body} END;`;
+    return `
+  ${trigger('INSERT', record('NEW'))}
+  ${trigger('UPDATE', `${record('OLD', keyChanged)} ${record('NEW')}`)}
+  ${trigger('DELETE', record('OLD'))}`;
+  }).join('');
+}
 
 // 스키마 버전별 변경. PRAGMA user_version에 적용된 개수를 기록한다.
 export const MIGRATIONS = [
@@ -191,6 +240,19 @@ export const MIGRATIONS = [
     PRIMARY KEY (account_id, book, chapter, verse)
   );
   `,
+  // v6: 기기 간 동기화. 동기화하는 동안(sync_state에 'tracking'이 있을 때) 트리거가 바뀐 줄을 sync_outbox에 적는다.
+  `
+  CREATE TABLE sync_state (
+    key   TEXT PRIMARY KEY,                    -- code, cursor, replace, epoch, syncedAt, tracking
+    value TEXT
+  );
+  CREATE TABLE sync_outbox (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,     -- 적은 차례 (지워도 다시 쓰지 않는다)
+    tbl TEXT NOT NULL,
+    key TEXT NOT NULL                          -- 기본 키 값들 JSON 배열 '[12,0,3]'. 같은 줄이 여러 번 적힐 수 있다
+  );
+  ${syncTriggers()}
+  `,
 ];
 
 /** 한 계획의 최대 기간 (1년 1독 계획까지) */
@@ -268,9 +330,13 @@ export async function openDatabase() {
 
 let memoryOnly = false;
 
-/** 테스트용: IndexedDB 없이 주어진 sql.js 데이터베이스를 그대로 쓴다. (저장하지 않는다) */
-export function useMemoryDatabase(database) {
+/**
+ * 테스트용: IndexedDB 없이 주어진 sql.js 데이터베이스를 그대로 쓴다. (저장하지 않는다)
+ * sqlModule을 주면 백업 내보내기·가져오기도 쓸 수 있다.
+ */
+export function useMemoryDatabase(database, sqlModule = SQL) {
   memoryOnly = true;
+  SQL = sqlModule;
   db = database;
   migrate(db);
   loadCurrentAccount();
@@ -304,7 +370,13 @@ function all(sql, params = {}) {
 }
 
 const one = (sql, params) => all(sql, params)[0] ?? null;
-const lastId = () => db.exec('SELECT last_insert_rowid()')[0].values[0][0];
+
+const writeListeners = new Set();
+
+/** 기록을 바꿔 저장할 때마다 부를 함수 (동기화가 바뀐 줄을 보내는 데 쓴다) */
+export function onWrite(fn) {
+  writeListeners.add(fn);
+}
 
 /** 트랜잭션으로 묶어 실행하고 IndexedDB에 저장한다. */
 async function write(fn) {
@@ -318,21 +390,31 @@ async function write(fn) {
     throw err;
   }
   await persist();
+  for (const listener of writeListeners) {
+    try {
+      listener();
+    } catch (err) {
+      console.warn(err);
+    }
+  }
   return result;
 }
 
 // ── 계정 ───────────────────────────────────────────────────
 
+// 계정 번호는 무작위라 만든 차례로 늘어놓는다.
+const ACCOUNT_ORDER = 'ORDER BY created_at, id';
+
 function loadCurrentAccount() {
   const saved = getSetting('currentAccount');
   const exists = saved != null && one('SELECT id FROM accounts WHERE id = $id', { $id: saved });
-  accountId = exists ? saved : one('SELECT id FROM accounts ORDER BY id LIMIT 1').id;
+  accountId = exists ? saved : one(`SELECT id FROM accounts ${ACCOUNT_ORDER} LIMIT 1`).id;
 }
 
 const accountFromRow = (r) => ({ id: r.id, name: r.name, color: r.color });
 
 export function listAccounts() {
-  return all('SELECT id, name, color FROM accounts ORDER BY id').map(accountFromRow);
+  return all(`SELECT id, name, color FROM accounts ${ACCOUNT_ORDER}`).map(accountFromRow);
 }
 
 export function currentAccount() {
@@ -351,12 +433,14 @@ export function createAccount(name) {
     const used = new Set(all('SELECT color FROM accounts').map((r) => r.color));
     const count = one('SELECT COUNT(*) AS n FROM accounts').n;
     const color = ACCOUNT_COLORS.find((c) => !used.has(c)) ?? ACCOUNT_COLORS[count % ACCOUNT_COLORS.length];
-    db.run('INSERT INTO accounts (name, color, created_at) VALUES ($name, $color, $now)', {
+    const id = newId();
+    db.run('INSERT INTO accounts (id, name, color, created_at) VALUES ($id, $name, $color, $now)', {
+      $id: id,
       $name: name,
       $color: color,
       $now: localTimestamp(),
     });
-    return lastId();
+    return id;
   });
 }
 
@@ -503,6 +587,20 @@ export function partKey(date, segments) {
   return `${iso}|${segments.map((s) => `${s.b}.${s.c}.${s.from ?? ''}.${s.to ?? ''}`).join(',')}`;
 }
 
+/** 조건(where, 계획은 p)에 맞는 계획들의 읽음 기록을 Map(partKey → 읽은 시각)으로 */
+function readingsByPart(where, params) {
+  return new Map(
+    all(
+      `SELECT date(p.start_date, '+' || (d.day - 1) || ' days') AS date, d.segments, r.read_at
+         FROM readings r
+         JOIN plan_days d ON d.plan_id = r.plan_id AND d.track = r.track AND d.day = r.day
+         JOIN plans p ON p.id = r.plan_id
+        WHERE ${where}`,
+      params,
+    ).map((r) => [partKey(r.date, JSON.parse(r.segments)), r.read_at]),
+  );
+}
+
 /** 계획의 묶음마다 날짜별 분량을 저장된 그대로 [{track, title, days: [{segments, chars, moved}]}] */
 export function planTrackDays(planId) {
   const tracks = all('SELECT track, title FROM plan_tracks WHERE plan_id = $id ORDER BY track', { $id: planId }).map(
@@ -533,21 +631,14 @@ export function savePlan({ start, end, title, selection, splitChapters, mode, tr
   return write(() => {
     const range = { $a: accountId, $s: toISO(start), $e: toISO(end) };
     // 지우기 전에 겹치는 계획의 읽음 기록을 날짜·범위로 잡아 둔다.
-    const kept = new Map(
-      all(
-        `SELECT date(p.start_date, '+' || (d.day - 1) || ' days') AS date, d.segments, r.read_at
-           FROM readings r
-           JOIN plan_days d ON d.plan_id = r.plan_id AND d.track = r.track AND d.day = r.day
-           JOIN plans p ON p.id = r.plan_id
-          WHERE p.account_id = $a AND p.start_date <= $e AND p.end_date >= $s`,
-        range,
-      ).map((r) => [partKey(r.date, JSON.parse(r.segments)), r.read_at]),
-    );
+    const kept = readingsByPart('p.account_id = $a AND p.start_date <= $e AND p.end_date >= $s', range);
     db.run('DELETE FROM plans WHERE account_id = $a AND start_date <= $e AND end_date >= $s', range);
+    const id = newId();
     db.run(
-      `INSERT INTO plans (account_id, start_date, end_date, title, mode, selection, split_chapters, total_chars, created_at)
-       VALUES ($a, $s, $e, $title, $mode, $sel, $split, $total, $now)`,
+      `INSERT INTO plans (id, account_id, start_date, end_date, title, mode, selection, split_chapters, total_chars, created_at)
+       VALUES ($id, $a, $s, $e, $title, $mode, $sel, $split, $total, $now)`,
       {
+        $id: id,
         $a: accountId,
         $s: toISO(start),
         $e: toISO(end),
@@ -559,7 +650,6 @@ export function savePlan({ start, end, title, selection, splitChapters, mode, tr
         $now: localTimestamp(),
       },
     );
-    const id = lastId();
     const insTrack = db.prepare('INSERT INTO plan_tracks (plan_id, track, title, total_chars) VALUES (?, ?, ?, ?)');
     const insDay = db.prepare('INSERT INTO plan_days (plan_id, track, day, segments, chars, moved) VALUES (?, ?, ?, ?, ?, ?)');
     const insRead = db.prepare('INSERT INTO readings (plan_id, track, day, read_at) VALUES (?, ?, ?, ?)');
@@ -668,11 +758,11 @@ export function saveVerses(planId, day, verses) {
   return write(() => {
     const now = localTimestamp();
     const stmt = db.prepare(
-      `INSERT OR IGNORE INTO saved_verses (account_id, book, chapter, verse, verse_end, text, plan_id, day, saved_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO saved_verses (id, account_id, book, chapter, verse, verse_end, text, plan_id, day, saved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     try {
-      for (const x of verses) stmt.run([accountId, x.b, x.c, x.v, x.e ?? null, x.t, planId, day, now]);
+      for (const x of verses) stmt.run([newId(), accountId, x.b, x.c, x.v, x.e ?? null, x.t, planId, day, now]);
     } finally {
       stmt.free();
     }
@@ -721,12 +811,12 @@ export function saveVerseToday(x) {
   return write(() => {
     const now = localTimestamp();
     db.run(
-      `INSERT INTO saved_verses (account_id, book, chapter, verse, verse_end, text, plan_id, day, saved_at)
-       SELECT $a, $b, $c, $v, $e, $t, NULL, NULL, $now
+      `INSERT INTO saved_verses (id, account_id, book, chapter, verse, verse_end, text, plan_id, day, saved_at)
+       SELECT $id, $a, $b, $c, $v, $e, $t, NULL, NULL, $now
         WHERE NOT EXISTS (SELECT 1 FROM saved_verses
                            WHERE account_id = $a AND book = $b AND chapter = $c AND verse = $v
                              AND substr(saved_at, 1, 10) = substr($now, 1, 10))`,
-      { $a: accountId, $b: x.b, $c: x.c, $v: x.v, $e: x.e ?? null, $t: x.t, $now: now },
+      { $id: newId(), $a: accountId, $b: x.b, $c: x.c, $v: x.v, $e: x.e ?? null, $t: x.t, $now: now },
     );
     return db.getRowsModified() > 0;
   });
@@ -852,7 +942,21 @@ export const saveYearVerse = (value) => setSetting(yearVerseKey(accountId), valu
 
 // ── 백업 ───────────────────────────────────────────────────
 
-/** 백업 파일로 현재 기록을 모두 바꾼다. 형식이 맞지 않으면 예외를 던지고 아무것도 바꾸지 않는다. */
+/** 백업 파일 바이트. 동기화 코드와 아직 보내지 않은 변경은 빼고 담는다(파일을 건네받은 사람이 동기화에 들어오지 못하게). */
+export function exportBackup() {
+  const copy = new SQL.Database(exportFile());
+  try {
+    copy.exec('DELETE FROM sync_state; DELETE FROM sync_outbox;');
+    return copy.export();
+  } finally {
+    copy.close();
+  }
+}
+
+/**
+ * 백업 파일로 현재 기록을 모두 바꾼다. 형식이 맞지 않으면 예외를 던지고 아무것도 바꾸지 않는다.
+ * 동기화 중이면 동기화된 다른 기기들의 기록도 이 백업으로 바뀐다.
+ */
 export async function importFile(bytes) {
   let incoming;
   try {
@@ -866,16 +970,372 @@ export async function importFile(bytes) {
     incoming?.close();
     throw new Error(`이 앱의 백업 파일이 아닙니다 (${err.message})`);
   }
-  db.close();
-  db = incoming;
-  loadCurrentAccount();
-  await persist();
+  await replaceDatabase(incoming);
 }
 
+/** 모든 기록을 지운다. 동기화 중이면 동기화된 다른 기기들에서도 지워진다. */
 export async function resetAll() {
+  const fresh = new SQL.Database();
+  migrate(fresh);
+  await replaceDatabase(fresh);
+}
+
+async function replaceDatabase(next) {
+  const sync = syncInfo();
   db.close();
-  db = new SQL.Database();
-  migrate(db);
+  db = next;
+  db.exec('DELETE FROM sync_state; DELETE FROM sync_outbox;'); // 백업에 남아 있던 동기화 상태는 쓰지 않는다
   loadCurrentAccount();
-  await persist();
+  if (sync) await syncStart(sync.code);
+  else await persist();
+}
+
+// ── 동기화 ─────────────────────────────────────────────────
+// 로그인 없이 동기화 코드 하나로 이 기기의 모든 계정 기록을 다른 기기와 맞춘다.
+// (주고받기: sync.js, 서버: server/sync-server.mjs)
+//
+// 줄 단위로 주고받는다. 동기화하는 동안 트리거가 바뀐 줄의 열쇠를 sync_outbox에 적고, 보낼 때 그 줄의
+// 지금 값(지웠으면 null)을 읽어 보낸다. 서버는 줄마다 마지막 값과 번호를 두고, 기기는 받은 마지막 번호(cursor)
+// 다음부터 받아 트리거를 끈 채 덮어쓴다. 같은 줄을 두 기기가 고치면 서버에 나중에 도착한 쪽이 이긴다.
+// 아직 보내지 않은 이 기기의 변경은 받은 값보다 앞선다(다음에 보내서 서버 값을 바꾼다).
+
+const SYNC_SPEC = new Map(SYNC_TABLES.map((t, order) => [t.name, { ...t, order }]));
+
+const syncGet = (key) => one('SELECT value FROM sync_state WHERE key = $k', { $k: key })?.value ?? null;
+
+function syncSet(key, value) {
+  if (value == null) db.run('DELETE FROM sync_state WHERE key = ?', [key]);
+  else {
+    db.run('INSERT INTO sync_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', [
+      key,
+      String(value),
+    ]);
+  }
+}
+
+/**
+ * 동기화 중이면 {code, cursor, replace, epoch, syncedAt, pending}, 아니면 null
+ *   replace: 다음에 보낼 때 서버 기록을 이 기기 기록으로 통째로 바꾼다
+ *   epoch: 동기화를 새로 시작할 때마다 바뀐다 (주고받는 사이에 다시 시작했는지 알아보는 데 쓴다)
+ *   pending: 아직 보내지 않은 줄 수
+ */
+export function syncInfo() {
+  const code = syncGet('code');
+  if (!code) return null;
+  return {
+    code,
+    cursor: Number(syncGet('cursor') ?? 0),
+    replace: syncGet('replace') === '1',
+    epoch: syncGet('epoch'),
+    syncedAt: syncGet('syncedAt'),
+    pending: one('SELECT COUNT(*) AS n FROM (SELECT DISTINCT tbl, key FROM sync_outbox)').n,
+  };
+}
+
+/** 이 기기 기록 요약 {accounts: [이름], counts: {표: 줄 수}}. 동기화로 연결할 때 어느 쪽을 남길지 고르는 데 쓴다 */
+export function localSummary() {
+  const count = (t) => one(`SELECT COUNT(*) AS n FROM ${t.name}${t.only ? ` WHERE ${t.only(t.name)}` : ''}`).n;
+  return {
+    accounts: listAccounts().map((a) => a.name),
+    counts: Object.fromEntries(SYNC_TABLES.map((t) => [t.name, count(t)])),
+  };
+}
+
+/**
+ * 보낼 변경을 적힌 차례대로 모은다. 줄마다 지금 값을 읽고(지웠으면 null), 대략 maxChars 글자에서 끊는다.
+ * @returns {{upTo: number, changes: Array<{t, k, d}>, more: boolean}} upTo는 이번에 담은 마지막 outbox 번호
+ */
+export function syncCollect(maxChars = 500000) {
+  const changes = [];
+  const seen = new Set();
+  const selects = new Map();
+  const outbox = db.prepare('SELECT seq, tbl, key FROM sync_outbox ORDER BY seq');
+  let upTo = 0;
+  let size = 0;
+  let more = false;
+  try {
+    while (outbox.step()) {
+      const [seq, tbl, key] = outbox.get();
+      const spec = SYNC_SPEC.get(tbl);
+      if (spec && !seen.has(`${tbl} ${key}`)) {
+        if (size >= maxChars) {
+          more = true;
+          break;
+        }
+        seen.add(`${tbl} ${key}`);
+        if (!selects.has(tbl)) {
+          selects.set(tbl, db.prepare(`SELECT * FROM ${tbl} WHERE ${spec.key.map((k) => `${k} = ?`).join(' AND ')}`));
+        }
+        const select = selects.get(tbl);
+        select.bind(JSON.parse(key));
+        const change = { t: tbl, k: key, d: select.step() ? select.getAsObject() : null };
+        select.reset();
+        size += JSON.stringify(change).length;
+        changes.push(change);
+      }
+      upTo = seq;
+    }
+  } finally {
+    outbox.free();
+    for (const s of selects.values()) s.free();
+  }
+  return { upTo, changes, more };
+}
+
+/**
+ * 서버 응답을 반영한다. upTo까지 보낸 변경은 outbox에서 지우고, 받은 줄을 넣는다.
+ * 보내는 사이 이 기기에서 또 바뀐 줄(아직 outbox에 남은 줄)은 받은 값을 버린다. 다음에 보낸다.
+ * @param {{upTo?: number, rows: Array<{t, k, d}>, cursor: number, replaced?: boolean}} res
+ *   replaced: 이번에 보낸 것이 서버 기록을 통째로 바꾸는 요청이었는지
+ * @returns {Promise<boolean>} 받은 줄로 기록이 바뀌었으면 true (화면을 다시 그린다)
+ */
+export async function syncApply({ upTo = 0, rows, cursor, replaced = false }) {
+  const changed = await write(() => {
+    db.run('DELETE FROM sync_outbox WHERE seq <= ?', [upTo]);
+    if (replaced) syncSet('replace', null);
+    const pending = new Set(all('SELECT tbl, key FROM sync_outbox').map((r) => `${r.tbl} ${r.key}`));
+    const result = applyRows(rows.filter((r) => !pending.has(`${r.t} ${r.k}`)));
+    syncSet('cursor', cursor);
+    syncSet('syncedAt', localTimestamp());
+    return result;
+  });
+  if (changed) loadCurrentAccount(); // 지금 계정이 다른 기기에서 지워졌을 수 있다
+  return changed;
+}
+
+/** 서버 번호가 이 기기가 아는 것보다 작을 때(서버 DB를 되돌린 경우 등) 처음부터 다시 받는다 */
+export function syncResetCursor() {
+  return write(() => syncSet('cursor', 0));
+}
+
+/**
+ * 이 기기의 기록을 서버 기록으로 통째로 바꾸고 동기화를 시작한다. (다른 기기의 코드로 연결하며 그쪽 기록을 받을 때)
+ * rows는 서버의 모든 줄(cursor 0부터 받은 것), cursor는 그 마지막 번호.
+ */
+export async function syncAdopt({ code, rows, cursor }) {
+  await write(() => {
+    db.run('DELETE FROM sync_outbox');
+    syncSet('tracking', null);
+    for (const t of [...SYNC_TABLES].reverse()) db.run(`DELETE FROM ${t.name}${t.only ? ` WHERE ${t.only(t.name)}` : ''}`);
+    applyRows(rows.filter((r) => r.d));
+    syncSet('code', code);
+    syncSet('cursor', cursor);
+    syncSet('epoch', newId());
+    syncSet('syncedAt', localTimestamp());
+    syncSet('tracking', 1);
+    ensureAccount();
+  });
+  loadCurrentAccount();
+}
+
+/**
+ * 이 기기의 기록으로 동기화를 시작한다: 다음에 보낼 때 서버 기록을 이 기기 기록으로 통째로 바꾼다.
+ * (새 동기화 코드를 만들 때, 다른 기기의 코드로 연결하며 이 기기 기록을 남길 때, 동기화 중에 백업을 가져오거나 모두 지울 때)
+ */
+export async function syncStart(code) {
+  rekeyLocalIds();
+  await write(() => {
+    db.run('DELETE FROM sync_outbox');
+    for (const { name, key, only } of SYNC_TABLES) {
+      const where = only ? ` WHERE ${only(name)}` : '';
+      db.run(`INSERT INTO sync_outbox (tbl, key) SELECT '${name}', json_array(${key.join(', ')}) FROM ${name}${where}`);
+    }
+    syncSet('code', code);
+    syncSet('cursor', 0);
+    syncSet('replace', 1);
+    syncSet('epoch', newId());
+    syncSet('syncedAt', null);
+    syncSet('tracking', 1);
+  });
+}
+
+/** 이 기기의 동기화를 끈다. 기록은 그대로 남는다. */
+export function syncStop() {
+  return write(() => {
+    db.run('DELETE FROM sync_state');
+    db.run('DELETE FROM sync_outbox');
+  });
+}
+
+const tableColumns = new Map();
+function columnsOf(table) {
+  if (!tableColumns.has(table)) tableColumns.set(table, all(`PRAGMA table_info(${table})`).map((c) => c.name));
+  return tableColumns.get(table);
+}
+
+/** 받은 값 하나를 SQLite에 넣을 수 있는 값으로 */
+const sqlValue = (v) => (v == null ? null : typeof v === 'object' ? JSON.stringify(v) : v);
+
+function upsertRow(table, data) {
+  const { key } = SYNC_SPEC.get(table);
+  const cols = columnsOf(table).filter((c) => c in data); // 모르는 열(새 버전 앱이 더한 열)은 버린다
+  const rest = cols.filter((c) => !key.includes(c));
+  const update = rest.length ? `UPDATE SET ${rest.map((c) => `${c} = excluded.${c}`).join(', ')}` : 'NOTHING';
+  db.run(
+    `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})
+     ON CONFLICT (${key.join(', ')}) DO ${update}`,
+    cols.map((c) => sqlValue(data[c])),
+  );
+}
+
+/** 받은 줄의 열쇠 값들. 이 기기에서 받지 않는 줄(기기마다 다른 설정 등)이나 깨진 열쇠면 null */
+function rowKey({ t, k }) {
+  const spec = SYNC_SPEC.get(t);
+  let values;
+  try {
+    values = JSON.parse(k);
+  } catch {
+    return null;
+  }
+  if (!spec || !Array.isArray(values) || values.length !== spec.key.length) return null;
+  if (t === 'settings' && !String(values[0]).startsWith('yearVerse:')) return null;
+  return values.map(sqlValue);
+}
+
+/**
+ * 받은 줄을 넣거나 지운다(트랜잭션 안에서 부른다). 트리거를 끈 채 넣고, 서로 어긋나는 것(같은 날 같은 구절을
+ * 두 기기에서 저장, 기간이 겹치는 계획)은 트리거를 켠 뒤 고쳐서 그 결과도 다른 기기로 가게 한다.
+ * @returns {boolean} 넣거나 지운 줄이 있으면 true
+ */
+function applyRows(rows) {
+  rows = rows.filter((r) => rowKey(r));
+  if (!rows.length) return false;
+  syncSet('tracking', null);
+  // 지운 줄 먼저(부모를 지우면 자식도 함께 지워진다), 그다음 부모 표부터 넣는다.
+  for (const r of rows.filter((r) => !r.d)) {
+    const { key } = SYNC_SPEC.get(r.t);
+    db.run(`DELETE FROM ${r.t} WHERE ${key.map((k) => `${k} = ?`).join(' AND ')}`, rowKey(r));
+  }
+  const order = (r) => SYNC_SPEC.get(r.t).order;
+  const verseConflicts = [];
+  const plans = [];
+  for (const r of rows.filter((r) => r.d).sort((a, b) => order(a) - order(b))) {
+    try {
+      upsertRow(r.t, r.d);
+      if (r.t === 'plans') plans.push(r.d.id);
+    } catch (err) {
+      const message = String(err?.message ?? err);
+      if (/UNIQUE constraint/.test(message) && r.t === 'saved_verses') verseConflicts.push(r.d);
+      // 부모가 지워진 줄(다른 기기에서 계획을 지우는 사이 읽음 표시한 날 등)이나 형식이 맞지 않는 줄은 버린다.
+      else if (/constraint failed/.test(message)) console.warn('[sync] 넣지 못한 줄', r.t, message);
+      else throw err;
+    }
+  }
+  syncSet('tracking', 1);
+  for (const d of verseConflicts) resolveVerseConflict(d);
+  for (const id of plans) resolvePlanOverlap(id);
+  ensureAccount();
+  return true;
+}
+
+/**
+ * 같은 계획의 같은 날 같은 구절을 두 기기에서 따로 저장한 경우: 번호가 작은 줄 하나만 남긴다.
+ * 어느 기기에서 고쳐도 같은 줄이 남고, 지운 줄은 다른 기기로도 지운 것으로 간다.
+ */
+function resolveVerseConflict(d) {
+  const local = one(
+    `SELECT id FROM saved_verses WHERE account_id = $a AND plan_id IS $p AND day IS $d
+        AND book = $b AND chapter = $c AND verse = $v`,
+    { $a: d.account_id, $p: d.plan_id, $d: d.day, $b: d.book, $c: d.chapter, $v: d.verse },
+  );
+  if (!local || local.id === d.id) return;
+  if (local.id < d.id) {
+    db.run('INSERT INTO sync_outbox (tbl, key) VALUES (?, ?)', ['saved_verses', JSON.stringify([d.id])]);
+  } else {
+    db.run('DELETE FROM saved_verses WHERE id = ?', [local.id]);
+    upsertRow('saved_verses', d);
+  }
+}
+
+/**
+ * 두 기기에서 같은 계정에 기간이 겹치는 계획을 따로 만든 경우: 나중에 만든 계획을 남긴다.
+ * 지우는 계획에서 같은 날짜에 같은 범위를 읽은 기록은 남는 계획으로 옮긴다(savePlan과 같은 방식).
+ */
+function resolvePlanOverlap(id) {
+  for (;;) {
+    const p = one('SELECT id, account_id, start_date, end_date, created_at FROM plans WHERE id = $id', { $id: id });
+    if (!p) return;
+    const q = one(
+      `SELECT id, created_at FROM plans
+        WHERE account_id = $a AND id <> $id AND start_date <= $e AND end_date >= $s LIMIT 1`,
+      { $a: p.account_id, $id: p.id, $s: p.start_date, $e: p.end_date },
+    );
+    if (!q) return;
+    const pWins = p.created_at > q.created_at || (p.created_at === q.created_at && p.id > q.id);
+    const [winner, loser] = pWins ? [p.id, q.id] : [q.id, p.id];
+    const kept = readingsByPart('p.id = $id', { $id: loser });
+    for (const d of all(
+      `SELECT d.track, d.day, d.segments, date(p.start_date, '+' || (d.day - 1) || ' days') AS date
+         FROM plan_days d JOIN plans p ON p.id = d.plan_id
+        WHERE d.plan_id = $id AND d.segments <> '[]'`,
+      { $id: winner },
+    )) {
+      const readAt = kept.get(partKey(d.date, JSON.parse(d.segments)));
+      if (readAt) {
+        db.run('INSERT OR IGNORE INTO readings (plan_id, track, day, read_at) VALUES (?, ?, ?, ?)', [
+          winner,
+          d.track,
+          d.day,
+          readAt,
+        ]);
+      }
+    }
+    db.run('DELETE FROM plans WHERE id = ?', [loser]);
+  }
+}
+
+/** 계정이 하나도 없으면(다른 기기에서 모두 지운 경우 등) 기본 계정을 만든다 */
+function ensureAccount() {
+  if (one('SELECT id FROM accounts LIMIT 1')) return;
+  db.run('INSERT INTO accounts (id, name, color, created_at) VALUES (?, ?, ?, ?)', [
+    newId(),
+    '나',
+    ACCOUNT_COLORS[0],
+    localTimestamp(),
+  ]);
+}
+
+/**
+ * 예전 자동 번호(1, 2, …)를 쓰는 계정·계획·저장한 구절에 무작위 번호를 새로 준다.
+ * 다른 기기에서 따로 쓰던 기록과 번호가 겹치지 않게, 이 기기 기록으로 동기화를 시작하기 전에 부른다.
+ */
+function rekeyLocalIds() {
+  const small = { $s: SMALL_ID };
+  const accounts = all('SELECT id FROM accounts WHERE id < $s', small);
+  const plans = all('SELECT id FROM plans WHERE id < $s', small);
+  const verses = all('SELECT id FROM saved_verses WHERE id < $s', small);
+  if (!accounts.length && !plans.length && !verses.length) return;
+  // 부모 번호를 바꾸는 동안 외래 키 검사를 끈다. (트랜잭션 밖에서만 바꿀 수 있다)
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    for (const { id } of accounts) {
+      const p = { $to: newId(), $from: id };
+      db.run('UPDATE accounts SET id = $to WHERE id = $from', p);
+      for (const t of ['plans', 'saved_verses', 'day_notes', 'verse_notes']) {
+        db.run(`UPDATE ${t} SET account_id = $to WHERE account_id = $from`, p);
+      }
+      db.run('UPDATE settings SET key = $to WHERE key = $from', { $to: yearVerseKey(p.$to), $from: yearVerseKey(id) });
+      db.run("UPDATE settings SET value = $to WHERE key = 'currentAccount' AND value = $from", {
+        $to: JSON.stringify(p.$to),
+        $from: JSON.stringify(id),
+      });
+    }
+    for (const { id } of plans) {
+      const p = { $to: newId(), $from: id };
+      db.run('UPDATE plans SET id = $to WHERE id = $from', p);
+      for (const t of ['plan_tracks', 'plan_days', 'readings', 'saved_verses']) {
+        db.run(`UPDATE ${t} SET plan_id = $to WHERE plan_id = $from`, p);
+      }
+    }
+    for (const { id } of verses) db.run('UPDATE saved_verses SET id = $to WHERE id = $from', { $to: newId(), $from: id });
+    if (db.exec('PRAGMA foreign_key_check').length) throw new Error('외래 키가 맞지 않습니다');
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+  loadCurrentAccount();
 }

@@ -1,5 +1,6 @@
 // app/ 폴더를 정적 파일로 내보내는 개발용 서버. 같은 Wi-Fi의 휴대폰에서도 접속할 수 있다.
 //   node scripts/serve.mjs [포트]
+// /api/로 오는 요청(기기 간 동기화)은 SYNC_URL(기본 http://127.0.0.1:5690)의 동기화 서버로 넘긴다.
 // 휴대폰에서 PWA로 설치하거나 서비스 워커를 쓰려면 HTTPS(또는 localhost)가 필요하다. README 참고.
 import http from 'node:http';
 import fs from 'node:fs';
@@ -9,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'app');
 const PORT = Number(process.argv[2] ?? process.env.PORT ?? 5173);
+const SYNC_URL = new URL(process.env.SYNC_URL ?? 'http://127.0.0.1:5690');
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -23,7 +25,26 @@ const TYPES = {
   '.pdf': 'application/pdf',
 };
 
+function proxyToSync(req, res) {
+  const upstream = http.request(
+    { host: SYNC_URL.hostname, port: SYNC_URL.port, method: req.method, path: req.url, headers: req.headers },
+    (up) => {
+      res.writeHead(up.statusCode, up.headers);
+      up.pipe(res);
+    },
+  );
+  upstream.on('error', () => {
+    if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'application/json' });
+    res.end('{"error":"sync_server_down"}');
+  });
+  req.pipe(upstream);
+}
+
 const server = http.createServer((req, res) => {
+  if (req.url.startsWith('/api/')) {
+    proxyToSync(req, res);
+    return;
+  }
   let pathname;
   try {
     pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);

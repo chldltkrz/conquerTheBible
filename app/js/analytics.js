@@ -8,7 +8,7 @@ import { today } from './dates.js';
 
 const POSTHOG_KEY = 'phc_sUgN9up8ToFEa9ThSWQ3LgHRw9Z7e3bAw6KJiGeVksqk'; // PostHog 프로젝트 API 키 (공개돼도 되는 키)
 const POSTHOG_HOST = 'https://us.i.posthog.com'; // EU 프로젝트면 https://eu.i.posthog.com
-export const APP_VERSION = '0.2.0'; // 배포할 때 올린다
+export const APP_VERSION = '0.3.0'; // 배포할 때 올린다
 const OPT_OUT_KEY = 'ctb-analytics-optout';
 const ONCE_KEY = 'ctb-analytics-once';
 const MAX_QUEUE = 200;
@@ -57,11 +57,14 @@ export function setOptOut(optOut) {
 function context() {
   return safe(() => {
     const plan = planOn(today());
+    const accounts = listAccounts();
+    const me = currentAccount().id;
     return {
       display_mode: displayMode(),
       app_version: APP_VERSION,
-      account_id: currentAccount().id, // 기기 안의 계정 번호(1, 2, …). 이름은 보내지 않는다
-      account_count: listAccounts().length,
+      // 기기 안에서 몇 번째 계정인지(1, 2, …). 계정 id는 동기화 때문에 무작위라 보내지 않는다. 이름도 보내지 않는다
+      account_id: accounts.findIndex((a) => a.id === me) + 1,
+      account_count: accounts.length,
       has_active_plan: !!plan,
       active_plan_mode: plan?.mode ?? null,
     };

@@ -27,3 +27,9 @@ try {
 }
 const { version: posthogVersion } = JSON.parse(await fs.readFile(path.join(POSTHOG, 'package.json'), 'utf8'));
 console.log(`posthog-js ${posthogVersion} → app/vendor/`);
+
+// QR 코드(동기화 링크). ES 모듈 빌드를 .js로 복사한다(서버가 .mjs의 형식을 모를 수 있어서). 라이선스는 파일 머리에 있다.
+const QRCODE = path.join(ROOT, 'node_modules', 'qrcode-generator');
+await fs.copyFile(path.join(QRCODE, 'dist', 'qrcode.mjs'), path.join(OUT, 'qrcode.js'));
+const { version: qrcodeVersion } = JSON.parse(await fs.readFile(path.join(QRCODE, 'package.json'), 'utf8'));
+console.log(`qrcode-generator ${qrcodeVersion} → app/vendor/`);
