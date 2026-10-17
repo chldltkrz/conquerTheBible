@@ -1,4 +1,4 @@
-import { openDatabase } from './db.js';
+import { flushPendingSaves, isPaused, openDatabase, resumeWriting } from './db.js';
 import { loadIndex } from './bible.js';
 import { applyReadingSettings } from './prefs.js';
 import { today, ymKey } from './dates.js';
@@ -14,7 +14,7 @@ import { searchView } from './views/search.js';
 import { changeAccount, openAccountSwitcher, openedProps } from './views/common.js';
 import { player } from './tts.js';
 import { initAnalytics, track } from './analytics.js';
-import { initSync, takeSyncLinkCode } from './sync.js';
+import { initSync, syncNow, takeSyncLinkCode } from './sync.js';
 import { openJoinDialog } from './views/syncsection.js';
 
 const main = document.getElementById('main');
@@ -107,6 +107,46 @@ function refreshView() {
 
 const refreshIfStale = () => staleView && setTimeout(refreshView, 0);
 
+// 한 번에 한 창만 기록을 쓴다 (db.js의 '여러 창'). 다른 창에 넘기고 쉬는 동안은 이 창을 막아 두고,
+// 다시 앞으로 나오거나 "여기서 계속 쓰기"를 누르면 되찾는다.
+let pausedDialog = null;
+
+function showPaused() {
+  if (pausedDialog) return;
+  const dlg = document.createElement('dialog');
+  dlg.className = 'dialog';
+  setHTML(
+    dlg,
+    html`<h2>다른 창에서 쓰고 있습니다</h2>
+      <p>맛있는만나가 다른 창(탭)이나 설치한 앱에서도 열려 있어 이 창은 잠시 쉽니다. 두 곳에서 함께 쓰면 기록이 엇갈리기 때문입니다.</p>
+      <div class="dialog-actions"><button class="btn btn-primary" data-resume>여기서 계속 쓰기</button></div>`,
+  );
+  dlg.addEventListener('cancel', (e) => e.preventDefault()); // Esc로 닫고 쓰지 못하게
+  dlg.addEventListener('click', (e) => e.target.closest('[data-resume]') && resume());
+  dlg.addEventListener('close', () => dlg.remove());
+  document.body.append(dlg);
+  dlg.showModal();
+  pausedDialog = dlg;
+}
+
+async function resume() {
+  if (!isPaused()) return;
+  try {
+    const reloaded = await resumeWriting();
+    pausedDialog?.close();
+    pausedDialog = null;
+    if (reloaded) {
+      // 그사이 다른 창이 바꾼 기록으로 다시 그린다
+      applyReadingSettings();
+      route({ refresh: true });
+    }
+    syncNow();
+  } catch (err) {
+    console.error(err);
+    toast(`기록을 다시 읽지 못했습니다: ${err.message}`);
+  }
+}
+
 async function boot() {
   // 동기화 링크(#sync=코드)로 열었으면 코드를 꺼내고 주소에서 지운다. 사용 통계에 주소가 남기 전에 한다.
   const linkCode = takeSyncLinkCode();
@@ -134,6 +174,8 @@ async function boot() {
   window.addEventListener('sync-status', refreshIfStale);
   document.addEventListener('focusout', refreshIfStale);
   document.addEventListener('close', refreshIfStale, true); // 창(dialog)을 닫으면
+  window.addEventListener('db-paused', showPaused);
+  window.addEventListener('pagehide', () => flushPendingSaves());
   window.addEventListener('sync-ended', () => {
     toast('다른 기기에서 동기화를 꺼서 이 기기도 멈췄습니다. 기록은 그대로 있습니다');
     refreshView();
@@ -161,8 +203,10 @@ async function boot() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       hiddenAt = Date.now();
+      flushPendingSaves(); // 입력 중이던 메모 등을 떠나기 전에 저장한다
       return;
     }
+    resume(); // 다른 창에 넘겼었으면 되찾는다
     if (hiddenAt != null && Date.now() - hiddenAt >= 30 * 60 * 1000) {
       track('app_opened', () => ({ launch: 'resume', ...openedProps() }));
     }

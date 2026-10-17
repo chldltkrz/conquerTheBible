@@ -6,7 +6,18 @@
 //                    'sync-ended'(다른 기기에서 동기화를 지워 이 기기도 멈춤)
 // 이 모듈은 Node 테스트에서도 import되므로 최상위에서 window/document를 직접 쓰지 않는다.
 
-import { onWrite, syncAdopt, syncApply, syncCollect, syncInfo, syncResetCursor, syncStart, syncStop } from './db.js';
+import {
+  flushPendingSaves,
+  isPaused,
+  onWrite,
+  syncAdopt,
+  syncApply,
+  syncCollect,
+  syncInfo,
+  syncResetCursor,
+  syncStart,
+  syncStop,
+} from './db.js';
 
 const PROTOCOL = 1;
 const PUSH_DELAY = 1500; // 기록을 바꾸고 보내기까지 (이어서 누르는 것을 한 번에 보낸다)
@@ -131,9 +142,12 @@ export function syncState() {
 let running = null;
 let again = false;
 
-/** 지금 동기화한다. 이미 하는 중이면 끝난 뒤 한 번 더 한다. 실패해도 throw하지 않고 상태로 알린다. */
+/**
+ * 지금 동기화한다. 이미 하는 중이면 끝난 뒤 한 번 더 한다. 실패해도 throw하지 않고 상태로 알린다.
+ * 다른 창에서 쓰고 있으면(이 창은 쉬는 중) 하지 않는다. 쓰는 창이 한다.
+ */
 export function syncNow() {
-  if (!syncInfo()) return Promise.resolve();
+  if (!syncInfo() || isPaused()) return Promise.resolve();
   if (running) {
     again = true;
     return running;
@@ -165,7 +179,8 @@ async function exchange() {
     if (!info) return;
     const { upTo, changes, more } = syncCollect(MAX_CHARS);
     // 기다리는 사이 동기화를 끄거나 새로 시작했으면(백업 가져오기, 다른 코드로 연결 등) 이 요청의 결과는 버린다.
-    const stale = () => syncInfo()?.epoch !== info.epoch;
+    // 다른 창에 쓰기를 넘겼을 때도 버린다 (그 창이 같은 것을 다시 보내고 받는다).
+    const stale = () => isPaused() || syncInfo()?.epoch !== info.epoch;
     let res;
     try {
       res = await request('POST', '', info.code, {
@@ -213,10 +228,13 @@ export function initSync() {
   window.addEventListener('online', () => syncNow());
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') syncNow();
-    else if (syncInfo()?.pending) {
-      // 다른 앱으로 가거나 닫기 전에 남은 것을 보낸다
-      clearTimeout(pushTimer);
-      syncNow();
+    else {
+      // 다른 앱으로 가거나 닫기 전에 입력 중이던 메모 등을 저장하고 남은 것을 보낸다
+      flushPendingSaves().then(() => {
+        if (!syncInfo()?.pending) return;
+        clearTimeout(pushTimer);
+        syncNow();
+      });
     }
   });
   setInterval(() => {

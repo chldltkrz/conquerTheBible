@@ -9,6 +9,7 @@ import { addDays, daysBetween, fromISO, localTimestamp, toISO } from './dates.js
 const IDB_NAME = 'conquer-the-bible';
 const IDB_STORE = 'files';
 const IDB_KEY = 'records.sqlite';
+const IDB_MARK = 'records.mark'; // 파일을 저장할 때마다 바뀌는 값. 다른 창이 그사이 저장했는지 알아보는 데 쓴다
 
 export const ACCOUNT_COLORS = ['#2f6a55', '#3b64b0', '#b0532a', '#7a4fa3', '#a3476b', '#2f7f8f', '#8a6d1f'];
 
@@ -271,6 +272,7 @@ const DAY_STATUS = `
 let SQL = null;
 let db = null;
 let saving = Promise.resolve();
+let savedMark = null; // 이 창이 마지막으로 읽거나 저장한 파일의 IDB_MARK
 let accountId = null;
 
 // ── IndexedDB ──────────────────────────────────────────────
@@ -286,14 +288,144 @@ function openIdb() {
   return idbPromise;
 }
 
+/** fn은 요청 하나(그 결과를 돌려준다)나, 트랜잭션이 끝난 뒤 결과를 만드는 함수를 돌려준다. */
 async function idb(mode, fn) {
   const conn = await openIdb();
   return new Promise((resolve, reject) => {
     const tx = conn.transaction(IDB_STORE, mode);
-    const req = fn(tx.objectStore(IDB_STORE));
-    tx.oncomplete = () => resolve(req.result);
+    const out = fn(tx.objectStore(IDB_STORE));
+    tx.oncomplete = () => resolve(typeof out === 'function' ? out() : out.result);
     tx.onerror = tx.onabort = () => reject(tx.error);
   });
+}
+
+/** 저장된 파일 {bytes, mark}. 처음 쓰는 기기면 bytes가 없다 */
+const readStored = () =>
+  idb('readonly', (s) => {
+    const file = s.get(IDB_KEY);
+    const mark = s.get(IDB_MARK);
+    return () => ({ bytes: file.result, mark: mark.result ?? null });
+  });
+
+// ── 여러 창(탭) ────────────────────────────────────────────
+// 창마다 데이터베이스 사본을 메모리에 들고 바뀔 때마다 파일 전체를 IndexedDB에 덮어쓰므로, 두 창(설치한 앱과
+// 브라우저 탭 등)이 함께 쓰면 늦게 저장한 창이 다른 창의 기록을 지운다. 그래서 한 번에 한 창만 쓴다.
+// 쓰는 창은 Web Lock을 쥐고 있다가, 다른 창이 열리거나 앞으로 나오면 하던 저장을 마치고 넘긴 뒤 쉰다(쓰기를 막는다).
+// 쉬던 창은 다시 쓸 때 되찾고, 그사이 다른 창이 저장했으면 IndexedDB에서 다시 읽는다.
+// window에 알리는 것: 'db-paused'(다른 창에 넘기고 쉬기 시작함)
+
+const LOCK_NAME = 'conquer-the-bible-db';
+const HANDOVER_WAIT = 1500; // 쓰는 창이 이만큼 답이 없으면(멈춘 창) 빼앗는다
+
+let paused = false;
+let releaseLock = null; // 쥐고 있는 잠금을 놓는 함수
+let channel = null; // 창끼리 주고받는 통로 (자기가 보낸 것은 받지 않는다)
+let resuming = null;
+const pendingSaves = new Set();
+
+/** 다른 창이 쓰고 있어 이 창은 쉬는 중인지 */
+export const isPaused = () => paused;
+
+function assertWritable() {
+  if (paused) throw new Error('다른 창에서 맛있는만나를 쓰고 있어 저장하지 않았습니다');
+}
+
+/**
+ * 곧 저장할 것을 등록한다 (입력을 멈추면 저장하는 메모 등). 앱을 떠나거나 다른 창에 넘기기 전에 바로 저장한다.
+ * @param {() => Promise<unknown>} save
+ * @returns {() => void} 등록을 지우는 함수 (저장했으면 부른다)
+ */
+export function addPendingSave(save) {
+  pendingSaves.add(save);
+  return () => pendingSaves.delete(save);
+}
+
+/** 등록된 저장을 모두 지금 한다 */
+export async function flushPendingSaves() {
+  const saves = [...pendingSaves];
+  pendingSaves.clear();
+  await Promise.allSettled(saves.map((save) => save()));
+}
+
+function pause() {
+  if (paused) return;
+  paused = true;
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('db-paused'));
+}
+
+/** 잠금을 쥐고 놓을 때까지 들고 있는다. ifAvailable인데 다른 창이 쥐고 있으면 false */
+function holdLock(options) {
+  return new Promise((resolve, reject) => {
+    let held = false;
+    navigator.locks
+      .request(LOCK_NAME, options, (lock) => {
+        if (!lock) return resolve(false);
+        held = true;
+        resolve(true);
+        return new Promise((release) => (releaseLock = release));
+      })
+      .catch((err) => {
+        if (!held) return reject(err);
+        // 멈춰 있던 사이 다른 창이 기다리다 못해 빼앗아 갔다.
+        releaseLock = null;
+        pause();
+      });
+  });
+}
+
+/** 이 창이 쓰는 창이 된다. 다른 창이 쓰고 있으면 넘겨 달라고 하고, 답이 없으면 빼앗는다. */
+async function acquire() {
+  if (!globalThis.navigator?.locks) return; // Web Locks가 없는 브라우저는 예전처럼 (여러 창을 막지 못한다)
+  if (await holdLock({ ifAvailable: true })) return;
+  channel?.postMessage('handover');
+  const wait = new AbortController();
+  const timer = setTimeout(() => wait.abort(), HANDOVER_WAIT);
+  try {
+    await holdLock({ signal: wait.signal });
+  } catch {
+    await holdLock({ steal: true });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 다른 창이 넘겨 달라고 하면: 입력 중이던 것을 마저 저장하고, 쓰기를 막고, 저장이 다 끝난 뒤 잠금을 놓는다. */
+async function handOver() {
+  if (!releaseLock || paused) return;
+  await flushPendingSaves();
+  pause();
+  await saving.catch(() => {});
+  releaseLock?.();
+  releaseLock = null;
+}
+
+function watchOtherTabs() {
+  if (!globalThis.navigator?.locks || typeof BroadcastChannel === 'undefined') return;
+  channel = new BroadcastChannel(LOCK_NAME);
+  channel.onmessage = (e) => {
+    if (e.data === 'handover') handOver();
+  };
+}
+
+/**
+ * 쉬던 창이 다시 쓰는 창이 된다. 그사이 다른 창이 저장했으면 IndexedDB에서 다시 읽는다.
+ * @returns {Promise<boolean>} 기록을 다시 읽었으면 true (화면을 다시 그린다)
+ */
+export function resumeWriting() {
+  if (!paused) return Promise.resolve(false);
+  resuming ??= (async () => {
+    try {
+      await acquire();
+      const stored = await readStored();
+      const changed = stored.mark !== savedMark;
+      if (changed) useStored(stored);
+      paused = false;
+      return changed;
+    } finally {
+      resuming = null;
+    }
+  })();
+  return resuming;
 }
 
 // ── SQLite ─────────────────────────────────────────────────
@@ -320,12 +452,20 @@ export function migrate(target) {
 }
 
 export async function openDatabase() {
-  SQL = await initSqlJs({ locateFile: (file) => `vendor/${file}` });
-  const bytes = await idb('readonly', (s) => s.get(IDB_KEY));
+  watchOtherTabs();
+  // 다른 창이 쓰고 있으면 넘겨받은 뒤에(그 창의 저장이 끝난 뒤에) 읽는다.
+  [SQL] = await Promise.all([initSqlJs({ locateFile: (file) => `vendor/${file}` }), acquire()]);
+  if (useStored(await readStored())) await persist();
+}
+
+/** IndexedDB에서 읽은 파일을 연다. 마이그레이션을 적용했으면 true */
+function useStored({ bytes, mark }) {
+  db?.close();
   db = bytes ? new SQL.Database(bytes) : new SQL.Database();
+  savedMark = mark;
   const migrated = migrate(db);
   loadCurrentAccount();
-  if (migrated) await persist();
+  return migrated;
 }
 
 let memoryOnly = false;
@@ -353,7 +493,16 @@ export function exportFile() {
 function persist() {
   if (memoryOnly) return Promise.resolve();
   const data = exportFile();
-  saving = saving.catch(() => {}).then(() => idb('readwrite', (s) => s.put(data, IDB_KEY)));
+  const mark = newId();
+  savedMark = mark;
+  saving = saving
+    .catch(() => {})
+    .then(() =>
+      idb('readwrite', (s) => {
+        s.put(data, IDB_KEY);
+        return s.put(mark, IDB_MARK);
+      }),
+    );
   return saving;
 }
 
@@ -380,6 +529,7 @@ export function onWrite(fn) {
 
 /** 트랜잭션으로 묶어 실행하고 IndexedDB에 저장한다. */
 async function write(fn) {
+  assertWritable();
   db.exec('BEGIN');
   let result;
   try {
@@ -981,6 +1131,7 @@ export async function resetAll() {
 }
 
 async function replaceDatabase(next) {
+  assertWritable();
   const sync = syncInfo();
   db.close();
   db = next;
@@ -1133,6 +1284,7 @@ export async function syncAdopt({ code, rows, cursor }) {
  * (새 동기화 코드를 만들 때, 다른 기기의 코드로 연결하며 이 기기 기록을 남길 때, 동기화 중에 백업을 가져오거나 모두 지울 때)
  */
 export async function syncStart(code) {
+  assertWritable();
   rekeyLocalIds();
   await write(() => {
     db.run('DELETE FROM sync_outbox');

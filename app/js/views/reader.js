@@ -3,6 +3,7 @@
 import { book, chapterUnit, formatSegments, loadBook, readingMinutes } from '../bible.js';
 import { formatDay, formatTimestamp, ymKey } from '../dates.js';
 import {
+  addPendingSave,
   currentAccount,
   getDayNote,
   getSetting,
@@ -257,11 +258,15 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     if (verse && !window.getSelection()?.toString()) toggleVerse(verse);
   };
   // ── 묵상 메모: 입력이 멈추면 잠시 뒤, 입력란을 벗어나면 바로 저장한다 ─────
+  // 기다리는 동안 앱을 떠나거나 다른 창에 넘기면 그때 바로 저장한다 (addPendingSave).
   const memoStatus = root.querySelector('#memo-status');
   let memoTimer = null;
+  let unpend = null;
   let savedMemo = note?.text ?? '';
   const saveMemo = async (text) => {
     clearTimeout(memoTimer);
+    unpend?.();
+    unpend = null;
     if (text === savedMemo) return;
     savedMemo = text;
     try {
@@ -280,6 +285,8 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     clearTimeout(memoTimer);
     const text = e.target.value;
     memoTimer = setTimeout(() => saveMemo(text), 800);
+    unpend?.();
+    unpend = addPendingSave(() => saveMemo(text));
   };
   root.onchange = (e) => {
     if (e.target.id === 'day-memo') saveMemo(e.target.value);
