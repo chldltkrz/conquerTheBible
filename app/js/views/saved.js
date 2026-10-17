@@ -6,6 +6,7 @@ import { deleteSavedVerse, listSavedVerses, saveVerseNote, verseKey, verseNotes 
 import { confirmDialog, html, setHTML, toast } from '../ui.js';
 import { accountChip, shareIcon, shareVerses, verseTabs } from './common.js';
 import { track } from '../analytics.js';
+import { openExportSheet } from './exportsheet.js';
 
 const SORTS = [
   { id: 'count', label: '많이 저장한 순' },
@@ -80,6 +81,7 @@ export async function savedView(root) {
         <div class="plan-summary">
           <b>${list.length}구절</b>
           <span>모두 ${times}번 저장 · 메모 ${notes.size}개</span>
+          <button class="link summary-action" data-action="export">내보내기</button>
         </div>
         <div class="segmented sort-tabs" role="radiogroup" aria-label="정렬">
           ${SORTS.map((s) => html`<button role="radio" data-sort="${s.id}" aria-checked="${sort === s.id}">${s.label}</button>`)}
@@ -116,7 +118,9 @@ export async function savedView(root) {
     const btn = e.target.closest('button');
     if (!btn) return;
     const d = btn.dataset;
-    if (d.share) {
+    if (d.action === 'export') {
+      openExportSheet('saved');
+    } else if (d.share) {
       const [b, c, v] = d.share.split(':');
       const x = listSavedVerses().find((s) => s.b === b && s.c === Number(c) && s.v === Number(v));
       if (x) shareVerses([x], 'saved');

@@ -24,6 +24,7 @@ import { rateLabel, speakerIcon } from './listen.js';
 import { isDevHostname, isOptedOut, setOptOut, track } from '../analytics.js';
 import { handleSyncAction, syncSection } from './syncsection.js';
 import { handleReminderAction, handleReminderChange, reminderSection } from './remindersection.js';
+import { openExportSheet } from './exportsheet.js';
 
 /**
  * 개발자에게 커피 보내기: 송금 링크를 넣으면 설정 화면에 그 버튼이 생긴다. 주소가 빈 항목은 보이지 않는다.
@@ -235,6 +236,9 @@ export async function settingsView(root, _params, { isCurrent }) {
                 <input type="file" id="import-file" accept=".sqlite,.sqlite3,.db,application/vnd.sqlite3,application/x-sqlite3" hidden />
               </label>
             </div>
+            <div class="button-row">
+              <button class="btn btn-ghost" data-action="export-notes">메모·구절을 글로 내보내기 (텍스트·PDF)</button>
+            </div>
             <button class="link danger" data-action="reset">모든 기록 지우기</button>
           </div>
         </section>
@@ -352,6 +356,8 @@ export async function settingsView(root, _params, { isCurrent }) {
       player.play(0);
     } else if (d.action === 'download') {
       downloadAll(btn);
+    } else if (d.action === 'export-notes') {
+      openExportSheet('settings');
     } else if (d.action === 'export') {
       downloadBackup();
       track('backup_exported');

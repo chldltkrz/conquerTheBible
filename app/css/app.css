@@ -3956,6 +3956,100 @@ a.mc-cell:active {
   grid-column: 1 / -1;
 }
 
+/* ── 메모·구절 내보내기 ───────────────────────────────── */
+.export-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.summary-action {
+  margin-left: auto;
+}
+
+/* 인쇄용 화면 (PDF로 저장). 화면에서는 숨기고, 인쇄할 때는 이것만 보인다 */
+#print-root {
+  display: none;
+}
+
+@media print {
+  @page {
+    margin: 16mm 14mm;
+  }
+
+  body {
+    background: #fff !important;
+  }
+
+  body > :not(#print-root) {
+    display: none !important;
+  }
+
+  #print-root {
+    display: block;
+    color: #111;
+    font-family: var(--font-serif);
+    font-size: 11pt;
+    line-height: 1.7;
+  }
+
+  #print-root h1 {
+    margin: 0 0 4pt;
+    font-family: var(--font-sans);
+    font-size: 18pt;
+  }
+
+  #print-root h2 {
+    margin: 20pt 0 10pt;
+    padding-bottom: 4pt;
+    border-bottom: 1px solid #999;
+    font-family: var(--font-sans);
+    font-size: 14pt;
+  }
+
+  #print-root h3 {
+    margin: 0 0 3pt;
+    font-family: var(--font-sans);
+    font-size: 11pt;
+  }
+
+  .px-meta {
+    margin: 0 0 8pt;
+    color: #555;
+    font-family: var(--font-sans);
+    font-size: 10pt;
+  }
+
+  .px-entry {
+    margin: 0 0 12pt;
+    break-inside: avoid;
+  }
+
+  .px-verse {
+    margin: 0 0 3pt;
+    color: #333;
+  }
+
+  .px-note {
+    margin: 0;
+    white-space: pre-wrap;
+  }
+
+  .px-note b {
+    margin-right: 6pt;
+    color: #555;
+    font-family: var(--font-sans);
+    font-size: 9.5pt;
+  }
+
+  .px-foot {
+    margin-top: 24pt;
+    color: #777;
+    font-family: var(--font-sans);
+    font-size: 9pt;
+  }
+}
+
 /* ── 대화상자·토스트 ──────────────────────────────────── */
 .dialog {
   width: min(92vw, 380px);

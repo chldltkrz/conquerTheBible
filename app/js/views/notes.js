@@ -5,6 +5,7 @@ import { listNotes, planOn } from '../db.js';
 import { html, setHTML } from '../ui.js';
 import { readHref } from './common.js';
 import { verseHead, verseRef } from './saved.js';
+import { openExportSheet } from './exportsheet.js';
 
 export async function notesView(root) {
   const notes = listNotes();
@@ -30,6 +31,7 @@ export async function notesView(root) {
       <div class="plan-summary">
         <b>메모 ${notes.length}개</b>
         <span>읽은 날 ${dayCount}개 · 구절 ${notes.length - dayCount}개</span>
+        <button class="link summary-action" data-action="export">내보내기</button>
       </div>
       <ul class="saved-list">
         ${notes.map((n) =>
@@ -61,4 +63,7 @@ export async function notesView(root) {
         )}
       </ul>`,
   );
+  root.onclick = (e) => {
+    if (e.target.closest('[data-action="export"]')) openExportSheet('notes');
+  };
 }
