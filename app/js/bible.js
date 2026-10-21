@@ -81,6 +81,27 @@ export function segmentVerses(seg, bookData) {
   return ch.verses.filter((v) => v.v >= lo && v.v <= hi);
 }
 
+/**
+ * 하루 분량(segments) 중 pos 절까지(그 절 포함) 읽은 비율 0~1. 글자 수(index.json의 w)로 잰다.
+ * 묶인 절(30-32)이나 다른 역본에만 있는 절 번호는 그 번호를 넘지 않는 마지막 절까지로 본다.
+ * pos가 분량 밖(다른 장이거나 구간 앞)이면 null.
+ */
+export function progressRatio(segments, pos) {
+  let total = 0;
+  let done = null;
+  for (const s of segments) {
+    const ch = book(s.b).chapters[s.c - 1];
+    const nums = verseNumbers(ch);
+    const here = s.b === pos.b && s.c === pos.c;
+    nums.forEach((v, i) => {
+      if ((s.from != null && v < s.from) || (s.to != null && v > s.to)) return;
+      total += ch.w[i];
+      if (here && v <= pos.v) done = total;
+    });
+  }
+  return done == null || !total ? null : done / total;
+}
+
 export const chapterUnit = (code) => (code === 'psa' ? '편' : '장');
 
 export const readingMinutes = (chars) => Math.max(1, Math.round(chars / CHARS_PER_MINUTE));

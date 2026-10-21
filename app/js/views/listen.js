@@ -20,9 +20,10 @@ export const rateLabel = (r) => `${r}×`;
  * 본문 화면에 듣기를 붙인다. 지원하지 않는 브라우저면 null.
  * @param {HTMLElement} root 본문 화면
  * @param {Map<string, {b, c, v, e, t, tr?}>} verses 절 키 → 절 (tr: 본문 t의 역본, BSB면 영어 목소리로 읽는다)
+ * @param {{onVerse?: (key: string) => void}} [on] onVerse: 절을 읽기 시작할 때 (어디까지 읽었는지 기록하는 데 쓴다)
  * @returns {{open(fromKey?), handle(action), reset()} | null}
  */
-export function createListening(root, verses) {
+export function createListening(root, verses, { onVerse } = {}) {
   if (!player) return null;
   const bar = root.querySelector('#tts-bar');
   let loaded = false;
@@ -101,6 +102,7 @@ export function createListening(root, verses) {
         label = item.label;
         highlight(item.key);
         renderBar();
+        if (item.key && player.playing) onVerse?.(item.key);
       },
       state: renderBar,
       end: () => {

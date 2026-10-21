@@ -494,6 +494,22 @@ main:focus-visible {
   color: var(--ink-2);
 }
 
+/* 오늘 분량을 읽는 중일 때 어디까지 읽었는지 */
+.today-progress {
+  height: 6px;
+  margin: -8px 0 18px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.today-progress span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+}
+
 .today-actions {
   display: flex;
   gap: 10px;
@@ -1411,6 +1427,70 @@ button.stat:active {
   display: block;
   color: var(--muted);
   font-size: 12px;
+}
+
+/* 오늘 분량을 어디까지 읽었는지: 머리말 아래 끝의 가는 막대 */
+.read-bar {
+  position: absolute;
+  inset: auto 0 -1px 0;
+  height: 3px;
+  pointer-events: none;
+}
+
+.read-bar span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 0 2px 2px 0;
+  transition: width 0.3s ease;
+}
+
+.read-pct {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 지난번에 읽던 곳 */
+.resume {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 4px;
+  padding: 8px 6px 8px 14px;
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+}
+
+.resume[hidden] {
+  display: none;
+}
+
+.resume-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+}
+
+.resume-text small {
+  margin-left: 4px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.scripture .verse.is-resume {
+  animation: resume-flash 2.4s ease-out;
+}
+
+@keyframes resume-flash {
+  0%,
+  40% {
+    background: var(--accent-soft);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  100% {
+    background: transparent;
+    box-shadow: none;
+  }
 }
 
 .reader-title b {

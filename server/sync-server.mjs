@@ -9,7 +9,8 @@
 //   POST   /api/sync/spaces   새 동기화 공간 → {code}
 //   GET    /api/sync/space    공간 요약: 연결하기 전에 보여 줄 계정 이름과 개수
 //   DELETE /api/sync/space    공간과 그 기록을 모두 지운다
-//   POST   /api/sync          {v, cursor, replace?, changes: [{t, k, d}]} → {cursor, more, rows: [{t, k, d}]}
+//   POST   /api/sync          {v, cursor, replace?, changes: [{t, k, d}]} → {cursor, more, rows: [{t, k, d}], tables}
+//                              (tables: 받는 표 이름들. 기기는 여기 든 표만 보낸다)
 //   GET    /api/sync/health   서버와 DB 확인
 //   (공간을 쓰는 요청은 Authorization: Bearer <동기화 코드>)
 //   /api/push/…               읽기 알림 (push.mjs)
@@ -37,7 +38,9 @@ export const TABLES = new Set([
   'day_notes',
   'verse_notes',
   'settings',
+  'reading_progress',
 ]);
+const TABLES_JSON = JSON.stringify([...TABLES]);
 
 const MAX_CHANGES = 10000; // 요청 하나에 보내는 줄 수
 const MAX_KEY = 200;
@@ -258,7 +261,7 @@ export function createHandler(pool, { push = null } = {}) {
         [space.id, version],
       );
       await client.query('COMMIT');
-      return `{"cursor":${next},"more":${more},"rows":[${rows.join(',')}]}`;
+      return `{"cursor":${next},"more":${more},"rows":[${rows.join(',')}],"tables":${TABLES_JSON}}`;
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
       // jsonb에 넣을 수 없는 글자(\u0000)

@@ -7,6 +7,7 @@ import {
   chapterUnit,
   formatSegments,
   loadBook,
+  progressRatio,
   readingMinutes,
   segmentVerses,
 } from '../bible.js';
@@ -20,6 +21,7 @@ import {
   saveDayNote,
   saveVerses,
   savedInReading,
+  saveReadingProgress,
   setRead,
   setSetting,
   unsaveVerses,
@@ -36,6 +38,7 @@ import {
   isParallel,
   partUnit,
   readHref,
+  readPercent,
   readingEventProps,
   readSnapshot,
   shareIcon,
@@ -82,7 +85,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     html`<header class="reader-head">
         <a class="icon-btn" href="#/month/${ymKey(y, m)}" aria-label="달력으로">‹</a>
         <div class="reader-title">
-          <small>${accountPrefix()}${formatDay(y, m, d)} · ${idx + 1}/${readingDays.length}</small>
+          <small>${accountPrefix()}${formatDay(y, m, d)} · ${idx + 1}/${readingDays.length}<span class="read-pct"></span></small>
           <b>${title}</b>
         </div>
         ${player ? html`<button class="icon-btn listen-btn" data-action="listen" aria-label="소리로 듣기">${speakerIcon}</button>` : ''}
@@ -90,12 +93,14 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
           <button class="icon-btn" data-font="-1" aria-label="글자 작게">가<sup>−</sup></button>
           <button class="icon-btn" data-font="1" aria-label="글자 크게">가<sup>+</sup></button>
         </div>
+        <span class="read-bar" aria-hidden="true"><span></span></span>
       </header>
       <div class="segmented tr-switch" role="radiogroup" aria-label="역본">
         ${READING_MODES.map(
           (x) => html`<button role="radio" data-mode="${x.id}" aria-checked="${x.id === readingMode()}" title="${x.detail}">${x.label}</button>`,
         )}
       </div>
+      <div class="resume" id="resume" hidden></div>
       <article class="scripture" aria-busy="true">
         <p class="muted loading">본문을 불러오는 중…</p>
       </article>
@@ -183,7 +188,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     el.querySelector('.vcount').title = n ? `${n}번 저장한 절` : '';
   };
 
-  const listening = createListening(root, verses);
+  const listening = createListening(root, verses, { onVerse: (key) => reachKey(key) });
   const bar = root.querySelector('#select-bar');
   const renderBar = () => {
     bar.hidden = selected.size === 0;
@@ -271,6 +276,11 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
       return;
     }
     if (action === 'toggle' || action === 'toggle-part') return toggleRead(e.target.closest('[data-action]'));
+    if (action === 'resume') return resume(Number(e.target.closest('[data-action]').dataset.track));
+    if (action === 'resume-close') {
+      resumeEl.hidden = true;
+      return;
+    }
 
     // 글자를 드래그해서 복사하려는 중이면 절 선택으로 보지 않는다.
     const verse = e.target.closest('.verse[data-ref]');
@@ -342,6 +352,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
         renderTrackFoot(p);
       }
       renderFoot();
+      renderProgress();
       const all = dayReadAt();
       if (track != null && read && !all) {
         const left = parts.filter((p) => !p.readAt).length;
@@ -353,6 +364,142 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
       btn.disabled = false;
       toast(`저장하지 못했습니다: ${err.message}`);
     }
+  };
+
+  // ── 어디까지 읽었는지 ────────────────────────────────────
+  // 화면 위에서 40% 높이(읽는 줄)에 걸린 절을 지금 읽는 곳으로 보고, 묶음마다 가장 뒤까지 간 절을 기록한다.
+  // 손으로 스크롤하기 전(처음 열 때, 책으로 바로 내려갈 때)은 세지 않는다. 소리로 들은 절도 센다.
+  const READ_LINE = 0.4;
+  const best = new Map(); // 묶음 → {pos, ratio}
+  for (const p of parts) {
+    const ratio = p.progress && progressRatio(p.segments, p.progress);
+    if (ratio) best.set(p.track, { pos: p.progress, ratio });
+  }
+  let verseEls = []; // 본문의 절 요소들 (문서 순서 = 위에서 아래)
+  const trackOf = (el) => (parallel ? Number(el.closest('[data-part]')?.dataset.part) : parts[0].track);
+
+  const pctEl = root.querySelector('.read-pct');
+  const barEl = root.querySelector('.read-bar > span');
+  const renderProgress = () => {
+    const pct = readPercent(entry, parts);
+    barEl.style.width = `${pct}%`;
+    pctEl.textContent = pct ? ` · ${pct}%` : '';
+  };
+  renderProgress();
+
+  let saveTimer = null;
+  let unpendProgress = null;
+  const dirty = new Set();
+  const saveProgress = async () => {
+    clearTimeout(saveTimer);
+    unpendProgress?.();
+    unpendProgress = null;
+    for (const t of [...dirty]) {
+      dirty.delete(t);
+      try {
+        await saveReadingProgress(plan.id, day, t, best.get(t).pos);
+      } catch {
+        dirty.add(t); // 다른 창에서 쓰는 중 등. 다음에 읽어 나갈 때 다시 저장한다
+      }
+    }
+  };
+
+  /** 그 묶음을 key 절까지 읽었다. 더 뒤로 갔을 때만 기록한다 (앞으로 돌아가 다시 읽어도 줄지 않는다) */
+  const reach = (trackNo, key) => {
+    const p = parts.find((x) => x.track === trackNo);
+    const v = verses.get(key);
+    if (!p || !v || p.readAt) return;
+    const ratio = progressRatio(p.segments, v);
+    if (!ratio || ratio <= (best.get(trackNo)?.ratio ?? 0)) return;
+    p.progress = { b: v.b, c: v.c, v: v.v };
+    best.set(trackNo, { pos: p.progress, ratio });
+    renderProgress();
+    dirty.add(trackNo);
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveProgress, 2000);
+    unpendProgress ??= addPendingSave(saveProgress); // 앱을 떠나거나 다른 창에 넘기면 바로 저장
+  };
+  function reachKey(key) {
+    const el = article.querySelector(`.verse[data-ref="${key}"]`);
+    if (el) reach(trackOf(el), key);
+  }
+
+  // 읽는 줄보다 위에서 시작한 마지막 절을 찾는다. 페이지 끝까지 내렸으면 마지막 절.
+  const sample = () => {
+    sampling = false;
+    if (!verseEls.length) return;
+    const line = window.innerHeight * READ_LINE;
+    let found = -1;
+    for (let lo = 0, hi = verseEls.length - 1; lo <= hi; ) {
+      const mid = (lo + hi) >> 1;
+      if (verseEls[mid].getBoundingClientRect().top <= line) {
+        found = mid;
+        lo = mid + 1;
+      } else hi = mid - 1;
+    }
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) found = verseEls.length - 1;
+    if (found >= 0) reach(trackOf(verseEls[found]), verseEls[found].dataset.ref);
+  };
+  let armed = false; // 손으로 스크롤해야 센다
+  let sampling = false;
+  const listen = new AbortController(); // 화면을 떠나면 창(window)에 단 것을 뗀다
+  const alive = () => isCurrent() || (listen.abort(), false);
+  const arm = () => {
+    if (alive()) armed = true;
+  };
+  for (const type of ['wheel', 'touchmove', 'pointerdown', 'keydown']) {
+    window.addEventListener(type, arm, { passive: true, signal: listen.signal });
+  }
+  window.addEventListener(
+    'scroll',
+    () => {
+      if (!alive() || !armed || sampling) return;
+      sampling = true;
+      setTimeout(sample, 200);
+    },
+    { passive: true, signal: listen.signal },
+  );
+
+  /** 그 묶음에서 pos 절의 요소. 다른 역본으로 보고 있어 그 번호가 없으면 그 앞의 가장 가까운 절 */
+  const verseElOf = (trackNo, pos) => {
+    const same = verseEls.filter((el) => {
+      const v = verses.get(el.dataset.ref);
+      return trackOf(el) === trackNo && v.b === pos.b && v.c === pos.c && v.v <= pos.v;
+    });
+    return same.at(-1) ?? null;
+  };
+
+  // 지난번에 읽던 곳: 오늘 화면에서 고른 책이 있으면 그 책, 아니면 가장 최근에 읽던 (아직 다 읽지 않은) 묶음
+  const resumeEl = root.querySelector('#resume');
+  const resumeTarget = () => {
+    const started = parts.filter((p) => !p.readAt && best.has(p.track));
+    if (focusTrack != null) return started.find((p) => p.track === focusTrack) ?? null;
+    return started.sort((a, b) => (b.progress.updatedAt ?? '').localeCompare(a.progress.updatedAt ?? ''))[0] ?? null;
+  };
+  const renderResume = () => {
+    const p = resumeTarget();
+    if (!p) return;
+    const { pos } = best.get(p.track);
+    resumeEl.hidden = false;
+    setHTML(
+      resumeEl,
+      html`<span class="resume-text">지난번에 <b>${book(pos.b).name} ${pos.c}:${pos.v}</b>까지 읽었습니다
+          <small>${readPercent(entry, [p])}%</small></span>
+        <button class="btn btn-primary btn-sm" data-action="resume" data-track="${p.track}">이어 읽기</button>
+        <button class="icon-btn" data-action="resume-close" aria-label="닫기">✕</button>`,
+    );
+  };
+  const resume = (trackNo) => {
+    resumeEl.hidden = true;
+    const target = best.get(trackNo);
+    const el = target && verseElOf(trackNo, target.pos);
+    if (!el) return;
+    // 그 절이 읽는 줄에 오도록 내린다
+    window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - window.innerHeight * READ_LINE + 4, behavior: 'smooth' });
+    el.classList.remove('is-resume');
+    void el.offsetWidth; // 다시 누르면 깜빡임을 처음부터
+    el.classList.add('is-resume');
+    track('reading_resumed', { percent: readPercent(entry, parts) });
   };
 
   // ── 본문 ─────────────────────────────────────────────────
@@ -374,7 +521,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
         article,
         parallel
           ? parts.map(
-              (p) => html`<section class="track" id="track-${p.track}">
+              (p) => html`<section class="track" id="track-${p.track}" data-part="${p.track}">
                 <div class="track-head">
                   <b>${p.title}</b><span>${formatSegments(p.segments)} · 약 ${readingMinutes(p.chars)}분</span>
                 </div>
@@ -387,8 +534,10 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
       parts.forEach(renderTrackFoot);
       article.removeAttribute('aria-busy');
       repaint();
+      verseEls = [...article.querySelectorAll('.verse[data-ref]')];
       if (opened) return;
       opened = true;
+      renderResume();
       track('reading_opened', () => ({ ...readingEventProps(plan, day), already_read: !!dayReadAt() }));
       // 오늘 화면에서 특정 책을 눌러 들어왔으면 그 책 부분으로 내려간다.
       if (focusTrack != null) root.querySelector(`#track-${focusTrack}`)?.scrollIntoView();

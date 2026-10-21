@@ -196,7 +196,9 @@ async function exchange() {
       continue;
     }
     if (stale()) return;
-    if (await syncApply({ upTo, rows: res.rows, cursor: res.cursor, replaced: info.replace })) notify('sync-applied');
+    if (await syncApply({ upTo, rows: res.rows, cursor: res.cursor, replaced: info.replace, tables: res.tables })) {
+      notify('sync-applied');
+    }
     if (!more && !res.more && !syncInfo()?.pending) return;
   }
 }

@@ -23,6 +23,7 @@ import {
   resetAll,
   saveDayNote,
   savePlan,
+  saveReadingProgress,
   saveVerses,
   saveYearVerse,
   setRead,
@@ -265,6 +266,22 @@ t('코드로 연결한 기기는 모든 계정의 기록을 받고, 그 뒤로 �
   assert.equal(planOn(oct1), null);
   assert.equal(rows(b.db, `SELECT COUNT(*) FROM readings WHERE plan_id = ${plan.id}`)[0][0], 0);
   assert.equal(listSavedVerses().length, 1, '계획을 지워도 저장한 구절은 남는다');
+});
+
+t('하루 분량을 어디까지 읽었는지도 다른 기기로 간다', async (ctx) => {
+  if (skip) return ctx.skip(skip);
+  const a = device();
+  const id = await savePlan(markPlan());
+  const b = device();
+  await pair(a, b);
+
+  a.use();
+  await sync(a); // 첫 응답에서 서버가 받는 표를 알려 준다
+  await saveReadingProgress(id, 1, 0, { b: 'mrk', c: 1, v: 20 });
+  await sync(a);
+  await sync(b);
+  const p = planOn(oct1).days[0].parts[0].progress;
+  assert.deepEqual([p.b, p.c, p.v], ['mrk', 1, 20]);
 });
 
 t('읽던 계획을 고쳐 저장해도 다른 기기에 읽음 기록이 이어진다', async (ctx) => {

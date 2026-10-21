@@ -26,7 +26,9 @@ const SMALL_ID = 2 ** 32;
 /**
  * 동기화하는 표와 기본 키. 이 순서대로(부모 표부터) 넣는다.
  * only: 그 조건에 맞는 줄만 동기화한다 (x는 표 이름 또는 트리거의 NEW/OLD)
- * v6 마이그레이션이 이 목록으로 트리거를 만든다. 표를 더하면 새 마이그레이션에서 그 표의 트리거를 만든다.
+ * since: v6 뒤에 더한 표는 그 표를 만든 마이그레이션 번호. 트리거는 그 마이그레이션에서 만든다(v6는 since가 없는 표만).
+ * optional: 서버가 응답의 tables로 이 표를 안다고 알려 줄 때만 보낸다. 모르는 표가 든 요청은 예전 서버가
+ *   통째로 거절하므로, 서버를 새로 배포하기 전에도 동기화가 멈추지 않게 한다.
  */
 export const SYNC_TABLES = [
   { name: 'accounts', key: ['id'] },
@@ -39,12 +41,13 @@ export const SYNC_TABLES = [
   { name: 'verse_notes', key: ['account_id', 'book', 'chapter', 'verse'] },
   // 설정 중에서는 계정마다 두는 올해의 말씀만 맞춘다. 글자 크기·목소리·지금 계정은 기기마다 따로 둔다.
   { name: 'settings', key: ['key'], only: (x) => `${x}.key LIKE 'yearVerse:%'` },
+  { name: 'reading_progress', key: ['plan_id', 'track', 'day'], since: 7, optional: true },
 ];
 
-/** 동기화하는 동안 바뀐 줄의 열쇠를 sync_outbox에 적는 트리거 */
-function syncTriggers() {
+/** 동기화하는 동안 바뀐 줄의 열쇠를 sync_outbox에 적는 트리거. since: 그 마이그레이션에서 더한 표만 (없으면 v6의 표) */
+function syncTriggers(since) {
   const tracking = "EXISTS (SELECT 1 FROM sync_state WHERE key = 'tracking')";
-  return SYNC_TABLES.map(({ name, key, only }) => {
+  return SYNC_TABLES.filter((t) => t.since === since).map(({ name, key, only }) => {
     const record = (x, cond) => {
       const values = key.map((k) => `${x}.${k}`).join(', ');
       const where = [only?.(x), cond].filter(Boolean).join(' AND ');
@@ -252,7 +255,23 @@ export const MIGRATIONS = [
     tbl TEXT NOT NULL,
     key TEXT NOT NULL                          -- 기본 키 값들 JSON 배열 '[12,0,3]'. 같은 줄이 여러 번 적힐 수 있다
   );
-  ${syncTriggers()}
+  ${syncTriggers(undefined)}
+  `,
+  // v7: 하루 분량을 어디까지 읽었는지. 본문 화면에서 읽는 줄(화면 위쪽)을 지나간 절과 소리로 들은 절 중 가장 뒤의 절.
+  //     묶음마다 하나. 다시 나누기로 그날 분량이 바뀌면 지운다.
+  `
+  CREATE TABLE reading_progress (
+    plan_id    INTEGER NOT NULL,
+    track      INTEGER NOT NULL,
+    day        INTEGER NOT NULL,
+    book       TEXT    NOT NULL,
+    chapter    INTEGER NOT NULL,
+    verse      INTEGER NOT NULL,
+    updated_at TEXT    NOT NULL,
+    PRIMARY KEY (plan_id, track, day),
+    FOREIGN KEY (plan_id, track, day) REFERENCES plan_days(plan_id, track, day) ON DELETE CASCADE
+  );
+  ${syncTriggers(7)}
   `,
 ];
 
@@ -670,9 +689,11 @@ function loadPlan(row) {
   const byDay = new Map();
   const moved = new Set();
   for (const d of all(
-    `SELECT d.track, d.day, d.segments, d.chars, d.moved, r.read_at
+    `SELECT d.track, d.day, d.segments, d.chars, d.moved, r.read_at,
+            g.book AS p_book, g.chapter AS p_chapter, g.verse AS p_verse, g.updated_at AS p_at
        FROM plan_days d
        LEFT JOIN readings r ON r.plan_id = d.plan_id AND r.track = d.track AND r.day = d.day
+       LEFT JOIN reading_progress g ON g.plan_id = d.plan_id AND g.track = d.track AND g.day = d.day
       WHERE d.plan_id = $id ORDER BY d.day, d.track`,
     { $id: plan.id },
   )) {
@@ -680,7 +701,14 @@ function loadPlan(row) {
     if (d.moved) moved.add(d.day);
     const segments = JSON.parse(d.segments);
     if (segments.length) {
-      byDay.get(d.day).push({ track: d.track, title: titles.get(d.track), segments, chars: d.chars, readAt: d.read_at });
+      byDay.get(d.day).push({
+        track: d.track,
+        title: titles.get(d.track),
+        segments,
+        chars: d.chars,
+        readAt: d.read_at,
+        progress: d.p_book == null ? null : { b: d.p_book, c: d.p_chapter, v: d.p_verse, updatedAt: d.p_at },
+      });
     }
   }
   plan.days = [...byDay].map(([day, parts]) => {
@@ -701,18 +729,44 @@ function loadPlan(row) {
 
 /**
  * 다시 나누기 결과를 저장한다. 분량 합계는 그대로라 계획·묶음의 total_chars는 바꾸지 않는다.
+ * 분량이 바뀐 날은 어디까지 읽었는지(reading_progress)도 지운다.
  * @param {Array<{track, changes: Array<{index, segments, chars, moved}>}>} trackChanges index는 0부터
  */
 export function rebalancePlan(planId, trackChanges) {
   return write(() => {
     const stmt = db.prepare('UPDATE plan_days SET segments = ?, chars = ?, moved = ? WHERE plan_id = ? AND track = ? AND day = ?');
+    const clear = db.prepare('DELETE FROM reading_progress WHERE plan_id = ? AND track = ? AND day = ?');
     try {
       for (const { track, changes } of trackChanges) {
-        for (const c of changes) stmt.run([JSON.stringify(c.segments), c.chars, c.moved ? 1 : 0, planId, track, c.index + 1]);
+        for (const c of changes) {
+          stmt.run([JSON.stringify(c.segments), c.chars, c.moved ? 1 : 0, planId, track, c.index + 1]);
+          clear.run([planId, track, c.index + 1]);
+        }
       }
     } finally {
       stmt.free();
+      clear.free();
     }
+  });
+}
+
+// ── 어디까지 읽었는지 ──────────────────────────────────────
+// 그날 분량을 읽는 도중의 위치. 다 읽었는지는 readings가 따로 기록한다.
+
+/**
+ * 그날 그 묶음을 어디까지 읽었는지 기록한다. pos는 읽은 마지막 절 {b, c, v}.
+ * (더 앞으로 돌아가지 않는지는 화면이 정한다. 여기서는 그대로 덮어쓴다)
+ */
+export function saveReadingProgress(planId, day, track, { b, c, v }) {
+  return write(() => {
+    db.run(
+      `INSERT INTO reading_progress (plan_id, track, day, book, chapter, verse, updated_at)
+       SELECT $p, $t, $d, $b, $c, $v, $now WHERE EXISTS
+              (SELECT 1 FROM plan_days WHERE plan_id = $p AND track = $t AND day = $d)
+       ON CONFLICT (plan_id, track, day) DO UPDATE
+          SET book = excluded.book, chapter = excluded.chapter, verse = excluded.verse, updated_at = excluded.updated_at`,
+      { $p: planId, $t: track, $d: day, $b: b, $c: c, $v: v, $now: localTimestamp() },
+    );
   });
 }
 
@@ -751,6 +805,21 @@ function readingsByPart(where, params) {
   );
 }
 
+/** 조건에 맞는 계획들의 어디까지 읽었는지를 Map(partKey → {book, chapter, verse, updated_at})으로 */
+function progressByPart(where, params) {
+  return new Map(
+    all(
+      `SELECT date(p.start_date, '+' || (d.day - 1) || ' days') AS date, d.segments,
+              g.book, g.chapter, g.verse, g.updated_at
+         FROM reading_progress g
+         JOIN plan_days d ON d.plan_id = g.plan_id AND d.track = g.track AND d.day = g.day
+         JOIN plans p ON p.id = g.plan_id
+        WHERE ${where}`,
+      params,
+    ).map(({ date, segments, ...g }) => [partKey(date, JSON.parse(segments)), g]),
+  );
+}
+
 /** 계획의 묶음마다 날짜별 분량을 저장된 그대로 [{track, title, days: [{segments, chars, moved}]}] */
 export function planTrackDays(planId) {
   const tracks = all('SELECT track, title FROM plan_tracks WHERE plan_id = $id ORDER BY track', { $id: planId }).map(
@@ -780,8 +849,10 @@ export function savePlan({ start, end, title, selection, splitChapters, mode, tr
   const sum = (days) => days.reduce((s, d) => s + d.chars, 0);
   return write(() => {
     const range = { $a: accountId, $s: toISO(start), $e: toISO(end) };
-    // 지우기 전에 겹치는 계획의 읽음 기록을 날짜·범위로 잡아 둔다.
-    const kept = readingsByPart('p.account_id = $a AND p.start_date <= $e AND p.end_date >= $s', range);
+    // 지우기 전에 겹치는 계획의 읽음 기록과 어디까지 읽었는지를 날짜·범위로 잡아 둔다.
+    const overlapping = 'p.account_id = $a AND p.start_date <= $e AND p.end_date >= $s';
+    const kept = readingsByPart(overlapping, range);
+    const keptProgress = progressByPart(overlapping, range);
     db.run('DELETE FROM plans WHERE account_id = $a AND start_date <= $e AND end_date >= $s', range);
     const id = newId();
     db.run(
@@ -803,19 +874,27 @@ export function savePlan({ start, end, title, selection, splitChapters, mode, tr
     const insTrack = db.prepare('INSERT INTO plan_tracks (plan_id, track, title, total_chars) VALUES (?, ?, ?, ?)');
     const insDay = db.prepare('INSERT INTO plan_days (plan_id, track, day, segments, chars, moved) VALUES (?, ?, ?, ?, ?, ?)');
     const insRead = db.prepare('INSERT INTO readings (plan_id, track, day, read_at) VALUES (?, ?, ?, ?)');
+    const insProgress = db.prepare(
+      'INSERT INTO reading_progress (plan_id, track, day, book, chapter, verse, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    );
     try {
       tracks.forEach((t, track) => {
         insTrack.run([id, track, t.title, sum(t.days)]);
         t.days.forEach((d, i) => {
           insDay.run([id, track, i + 1, JSON.stringify(d.segments), d.chars, d.moved ? 1 : 0]);
-          const readAt = d.segments.length ? kept.get(partKey(addDays(start, i), d.segments)) : null;
+          if (!d.segments.length) return;
+          const key = partKey(addDays(start, i), d.segments);
+          const readAt = kept.get(key);
           if (readAt) insRead.run([id, track, i + 1, readAt]);
+          const g = keptProgress.get(key);
+          if (g) insProgress.run([id, track, i + 1, g.book, g.chapter, g.verse, g.updated_at]);
         });
       });
     } finally {
       insTrack.free();
       insDay.free();
       insRead.free();
+      insProgress.free();
     }
     return id;
   });
@@ -1197,6 +1276,8 @@ export function localSummary() {
  * @returns {{upTo: number, changes: Array<{t, k, d}>, more: boolean}} upTo는 이번에 담은 마지막 outbox 번호
  */
 export function syncCollect(maxChars = 500000) {
+  // 서버가 아직 모르는 표(optional)의 변경은 보내지 않고 버린다 (예전 서버는 요청을 통째로 거절한다).
+  const serverTables = new Set(JSON.parse(syncGet('tables') ?? '[]'));
   const changes = [];
   const seen = new Set();
   const selects = new Map();
@@ -1208,7 +1289,7 @@ export function syncCollect(maxChars = 500000) {
     while (outbox.step()) {
       const [seq, tbl, key] = outbox.get();
       const spec = SYNC_SPEC.get(tbl);
-      if (spec && !seen.has(`${tbl} ${key}`)) {
+      if (spec && (!spec.optional || serverTables.has(tbl)) && !seen.has(`${tbl} ${key}`)) {
         if (size >= maxChars) {
           more = true;
           break;
@@ -1236,14 +1317,16 @@ export function syncCollect(maxChars = 500000) {
 /**
  * 서버 응답을 반영한다. upTo까지 보낸 변경은 outbox에서 지우고, 받은 줄을 넣는다.
  * 보내는 사이 이 기기에서 또 바뀐 줄(아직 outbox에 남은 줄)은 받은 값을 버린다. 다음에 보낸다.
- * @param {{upTo?: number, rows: Array<{t, k, d}>, cursor: number, replaced?: boolean}} res
+ * @param {{upTo?: number, rows: Array<{t, k, d}>, cursor: number, replaced?: boolean, tables?: string[]}} res
  *   replaced: 이번에 보낸 것이 서버 기록을 통째로 바꾸는 요청이었는지
+ *   tables: 서버가 받는 표 (예전 서버는 알려 주지 않는다. 그러면 optional 표는 보내지 않는다)
  * @returns {Promise<boolean>} 받은 줄로 기록이 바뀌었으면 true (화면을 다시 그린다)
  */
-export async function syncApply({ upTo = 0, rows, cursor, replaced = false }) {
+export async function syncApply({ upTo = 0, rows, cursor, replaced = false, tables = null }) {
   const changed = await write(() => {
     db.run('DELETE FROM sync_outbox WHERE seq <= ?', [upTo]);
     if (replaced) syncSet('replace', null);
+    syncSet('tables', Array.isArray(tables) ? JSON.stringify(tables) : null);
     const pending = new Set(all('SELECT tbl, key FROM sync_outbox').map((r) => `${r.tbl} ${r.key}`));
     const result = applyRows(rows.filter((r) => !pending.has(`${r.t} ${r.k}`)));
     syncSet('cursor', cursor);
@@ -1416,13 +1499,15 @@ function resolvePlanOverlap(id) {
     const pWins = p.created_at > q.created_at || (p.created_at === q.created_at && p.id > q.id);
     const [winner, loser] = pWins ? [p.id, q.id] : [q.id, p.id];
     const kept = readingsByPart('p.id = $id', { $id: loser });
+    const keptProgress = progressByPart('p.id = $id', { $id: loser });
     for (const d of all(
       `SELECT d.track, d.day, d.segments, date(p.start_date, '+' || (d.day - 1) || ' days') AS date
          FROM plan_days d JOIN plans p ON p.id = d.plan_id
         WHERE d.plan_id = $id AND d.segments <> '[]'`,
       { $id: winner },
     )) {
-      const readAt = kept.get(partKey(d.date, JSON.parse(d.segments)));
+      const key = partKey(d.date, JSON.parse(d.segments));
+      const readAt = kept.get(key);
       if (readAt) {
         db.run('INSERT OR IGNORE INTO readings (plan_id, track, day, read_at) VALUES (?, ?, ?, ?)', [
           winner,
@@ -1430,6 +1515,14 @@ function resolvePlanOverlap(id) {
           d.day,
           readAt,
         ]);
+      }
+      const g = keptProgress.get(key);
+      if (g) {
+        db.run(
+          `INSERT OR IGNORE INTO reading_progress (plan_id, track, day, book, chapter, verse, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [winner, d.track, d.day, g.book, g.chapter, g.verse, g.updated_at],
+        );
       }
     }
     db.run('DELETE FROM plans WHERE id = ?', [loser]);
@@ -1476,7 +1569,7 @@ function rekeyLocalIds() {
     for (const { id } of plans) {
       const p = { $to: newId(), $from: id };
       db.run('UPDATE plans SET id = $to WHERE id = $from', p);
-      for (const t of ['plan_tracks', 'plan_days', 'readings', 'saved_verses']) {
+      for (const t of ['plan_tracks', 'plan_days', 'readings', 'reading_progress', 'saved_verses']) {
         db.run(`UPDATE ${t} SET plan_id = $to WHERE plan_id = $from`, p);
       }
     }

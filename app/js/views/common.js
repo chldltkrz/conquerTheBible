@@ -1,6 +1,6 @@
 // 여러 화면에서 함께 쓰는 조각들
 
-import { book, chapterUnit, describeSelection, formatSegments, getIndex, readingMinutes } from '../bible.js';
+import { book, chapterUnit, describeSelection, formatSegments, getIndex, progressRatio, readingMinutes } from '../bible.js';
 import {
   addDays,
   compareDate,
@@ -331,6 +331,23 @@ export function streakStats(now = today()) {
 export const STREAK_MILESTONES = [3, 7, 14, 21, 30, 50, 100, 200, 365];
 
 /** 진행 상황: 다 읽은 날 수와, 읽은 분량(병렬이면 책마다 읽은 것까지)의 비율 */
+/** 묶음(그날 한 책·그룹) 하나를 어디까지 읽었는지 0~1. 읽음 표시했으면 1, 기록이 없으면 0 */
+export function partRatio(part) {
+  if (part.readAt) return 1;
+  return (part.progress && progressRatio(part.segments, part.progress)) || 0;
+}
+
+/**
+ * 그날 분량을 어디까지 읽었는지 퍼센트 (묶음마다 글자 수로 더한다).
+ * 다 읽음 표시를 하기 전에는 99를 넘지 않는다. parts를 주면 그 묶음들만.
+ */
+export function readPercent(entry, parts = entry.parts) {
+  if (parts.every((p) => p.readAt)) return 100;
+  const total = parts.reduce((s, p) => s + p.chars, 0);
+  const done = parts.reduce((s, p) => s + partRatio(p) * p.chars, 0);
+  return total ? Math.min(99, Math.floor((done / total) * 100)) : 0;
+}
+
 export function progressOf(plan) {
   const reading = plan.days.filter((d) => d.segments.length);
   const readChars = plan.days.reduce(
