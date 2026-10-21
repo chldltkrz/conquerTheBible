@@ -1562,6 +1562,12 @@ button.stat:active {
   margin: 0 0 0.6em;
 }
 
+/* 산문도 한 절씩 줄을 나눈다 (시가서는 아래에서 내어쓰기까지) */
+.prose .verse {
+  display: block;
+  margin-bottom: 0.35em;
+}
+
 .poetry .verse {
   display: block;
   padding-left: 1.6em;
@@ -2032,7 +2038,7 @@ button.stat:active {
   font-size: 14px;
 }
 
-/* 함께 보기: 새번역 절 아래에 BSB를 붙이고, 산문도 한 절씩 줄을 나눈다 */
+/* 함께 보기: 새번역 절 아래에 BSB를 붙이고, 절 사이를 조금 더 띄운다 */
 .scripture .en,
 .sample .en {
   display: block;
@@ -2048,7 +2054,6 @@ button.stat:active {
 }
 
 .scripture.is-both .prose .verse {
-  display: block;
   margin-bottom: 0.6em;
 }
 
