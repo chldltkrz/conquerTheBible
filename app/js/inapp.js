@@ -1,15 +1,14 @@
 // 앱 안 브라우저(인앱 브라우저): 카카오톡·네이버·인스타그램 등에서 링크를 누르면 그 앱 안의 브라우저로 열린다.
 // 거기서는 기록이 그 앱 안에만 따로 저장되고(휴대폰 브라우저와 나뉜다) 홈 화면에 추가·읽기 알림을 쓸 수 없으며,
-// 동기화·함께 읽기 링크를 열면 그 앱 안의 기록에 연결된다. 그래서 처음 여는 것이면 앱을 띄우기 전에 휴대폰 브라우저로 옮긴다.
+// 동기화·함께 읽기 링크를 열면 그 앱 안의 기록에 연결된다. 그래서 앱을 띄우기 전에 휴대폰 브라우저로 옮긴다.
 //   카카오톡: kakaotalk://web/openExternal (iOS·안드로이드 모두 기본 브라우저로)
 //   라인: 주소에 openExternalBrowser=1
 //   그 밖의 앱(안드로이드): intent://로 Chrome을 연다
 //   그 밖의 앱(iOS): 앱 밖으로 보낼 방법이 없어 "Safari로 열기" 메뉴를 알려 준다
-// 옮기지 못했으면 "여기서 계속 보기"로 그 앱 안에서 쓸 수 있다. 이미 그 앱 안에 기록을 쌓아 온 사람은 옮기지 않고
-// (옮기면 기록이 사라진 것처럼 보인다) 동기화로 옮기는 법을 한 번 알려 준다.
+// 그 앱 안에 쌓아 온 기록이 있어도 옮긴다. 옮기지 못했거나 그 기록을 보려면 "여기서 계속 보기"로 그 앱 안에서 쓴다
+// (그 창에서만. 링크를 다시 누르면 또 옮긴다).
 // 이 모듈은 Node 테스트에서도 import되므로 최상위에서 window/document를 직접 쓰지 않는다.
 
-import { hasStoredFile } from './db.js';
 import { copyText, html, setHTML, toast } from './ui.js';
 
 // 앞에 있는 것부터 맞춰 본다. 실제 브라우저(Chrome·Safari·삼성 인터넷·웨일)는 넣지 않는다.
@@ -26,7 +25,7 @@ const APPS = [
 ];
 
 const LINE_PARAM = 'openExternalBrowser';
-const STAY_KEY = 'ctb-inapp'; // '1'이면 이 기기의 인앱 브라우저에서 계속 쓰기로 했거나 옮기는 법을 이미 알려 줬다
+const STAY_KEY = 'ctb-inapp-stay'; // sessionStorage. '1'이면 이 창에서는 "여기서 계속 보기"를 골랐다
 
 /** 사용자 에이전트로 본 인앱 브라우저 {id, name, os: 'android' | 'ios'}. 아니면 null */
 export function detectInApp(ua) {
@@ -63,7 +62,7 @@ export function withoutEscapeParam(href) {
 
 const stayed = () => {
   try {
-    return localStorage.getItem(STAY_KEY) === '1';
+    return sessionStorage.getItem(STAY_KEY) === '1';
   } catch {
     return false;
   }
@@ -71,23 +70,21 @@ const stayed = () => {
 
 const stay = () => {
   try {
-    localStorage.setItem(STAY_KEY, '1');
+    sessionStorage.setItem(STAY_KEY, '1');
   } catch {
-    // 저장할 수 없으면 다음에 또 묻는다
+    // 저장할 수 없으면 새로 고칠 때 또 묻는다
   }
 };
 
 /**
- * main.js의 boot()에서 앱을 띄우기 전에 부른다. 인앱 브라우저에서 처음 열었으면 휴대폰 브라우저로 옮기고
+ * main.js의 boot()에서 앱을 띄우기 전에 부른다. 인앱 브라우저에서 열었으면 휴대폰 브라우저로 옮기고
  * 안내 화면을 그린 채 기다린다 (그 앱 안에서는 앱을 띄우지 않는다). "여기서 계속 보기"를 누르면 끝난다.
- * @returns {Promise<object|null>} 그 앱 안에 쓰던 기록이 있어 옮기지 않았으면 그 앱 → 앱을 띄운 뒤 noticeInApp()
  */
 export async function leaveInAppBrowser(main) {
   const cleaned = withoutEscapeParam(location.href);
   if (cleaned) history.replaceState(null, '', cleaned);
   const app = detectInApp(navigator.userAgent);
-  if (!app || stayed()) return null;
-  if (await hasStoredFile()) return app;
+  if (!app || stayed()) return;
   const target = externalUrl(location.href, app);
   const before = main.innerHTML;
   const choice = showLeaveScreen(main, app, target);
@@ -96,7 +93,6 @@ export async function leaveInAppBrowser(main) {
   await choice;
   stay();
   main.innerHTML = before;
-  return null;
 }
 
 /** 안내 화면을 그린다. "여기서 계속 보기"를 누르면 끝나는 Promise */
@@ -134,29 +130,4 @@ function showLeaveScreen(main, app, target) {
       }
     };
   });
-}
-
-/** 인앱 브라우저 안에 쌓아 온 기록을 휴대폰 브라우저로 옮기는 법을 한 번 알려 준다 */
-export function noticeInApp(app) {
-  stay();
-  const dlg = document.createElement('dialog');
-  dlg.className = 'dialog';
-  setHTML(
-    dlg,
-    html`<form method="dialog">
-      <h2>${app.name} 안에서 쓰고 있습니다</h2>
-      <p>지금까지의 기록은 ${app.name} 안에만 저장되어 있습니다. 휴대폰 브라우저(Chrome·Safari)에서 쓰면 홈 화면에 추가와 읽기 알림도 쓸 수 있습니다.</p>
-      <p>옮기려면 설정 &gt; 기기 간 동기화를 켜고, 브라우저에서 같은 동기화 코드로 연결하세요. 기록이 그대로 옮겨집니다.</p>
-      <div class="dialog-actions">
-        <button value="" class="btn btn-ghost">닫기</button>
-        <button value="sync" class="btn btn-primary">동기화 켜기</button>
-      </div>
-    </form>`,
-  );
-  dlg.addEventListener('close', () => {
-    if (dlg.returnValue === 'sync') location.hash = '#/settings';
-    dlg.remove();
-  });
-  document.body.append(dlg);
-  dlg.showModal();
 }
