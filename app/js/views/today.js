@@ -1,8 +1,9 @@
-// 오늘 화면: 오늘 분량, 진행률, 함께 읽기 방, 밀린 읽기, 다른 계정의 오늘 상태
+// 오늘 화면: 오늘 분량, 진행률, 밀린 읽기, 함께 읽기 방, 다른 계정의 오늘 상태, 다가오는 읽기
 
 import { formatSegments, readingMinutes } from '../bible.js';
 import {
   addDays,
+  addMonths,
   compareDate,
   daysBetween,
   formatDate,
@@ -18,7 +19,7 @@ import { confirmDialog, html, setHTML, formatNumber, toast } from '../ui.js';
 import { track } from '../analytics.js';
 import { dailyVerseRef, loadPassage, passageRef, passageText } from '../verses.js';
 import { openStatSheet } from './stats.js';
-import { openYearVerseEditor, yearVerseBox } from './yearverse.js';
+import { hasYearVerse, openYearVerseEditor, yearVerseBox } from './yearverse.js';
 import { openRoomCreate, openRoomSheet, roomArea, roomCreateCard } from './roomsection.js';
 
 // 진행 상황 칸을 누를 수 있다는 표시
@@ -41,6 +42,7 @@ import {
   partUnit,
   periodLabel,
   planRebalance,
+  startingPeriod,
   progressOf,
   progressSection,
   readHref,
@@ -102,6 +104,11 @@ export async function todayView(root) {
     const now = today();
     const plan = planOn(now);
 
+    // 정해 둔 올해의 말씀은 맨 위에, 아직 정하지 않았으면 정하기 상자를 맨 아래에 둔다 (오늘 할 일이 먼저 보이게)
+    const yvSet = hasYearVerse(now);
+    const yvTop = yvSet ? yearVerseBox(now) : '';
+    const yvBottom = yvSet ? '' : html`<div class="yv-later">${yearVerseBox(now)}</div>`;
+
     const head = html`<header class="page-head head-row">
       <div>
         <p class="eyebrow">${formatDay(now.y, now.m, now.d)}</p>
@@ -153,26 +160,34 @@ export async function todayView(root) {
       const upcomingPlan = listPlans()
         .filter((p) => compareDate(p.start, now) > 0)
         .at(-1);
-      // 이 달이 비어 있으면 한 달 계획을, 이 달에 다른 계획이 있으면 오늘부터 30일(다음 계획이 있으면 그 전날까지)을 권한다.
+      // 이 달이 비어 있으면 startingPeriod(달 초면 한 달, 아니면 오늘부터)를, 이 달에 다른 계획이 있으면
+      // 오늘부터 30일(다음 계획이 있으면 그 전날까지)을 권한다.
       const monthFree = !plansOverlapping(monthStart(now.y, now.m), monthEnd(now.y, now.m)).length;
       const thirty = addDays(now, 29);
       const beforeNext = upcomingPlan && addDays(upcomingPlan.start, -1);
       const fromToday = newPlanHref(now, beforeNext && compareDate(beforeNext, thirty) < 0 ? beforeNext : thirty);
+      const starting = startingPeriod(now);
+      const nextMonth = addMonths(now.y, now.m, 1);
+      const monthHref = `#/new/${ymKey(now.y, now.m)}`;
+      const ctaButtons = !monthFree
+        ? html`<a class="btn btn-primary" href="${fromToday}">오늘부터 계획 만들기</a>`
+        : starting.kind === 'month'
+          ? html`<a class="btn btn-primary" href="${monthHref}">${now.m}월 계획 만들기</a>
+              <a class="btn btn-ghost" href="${fromToday}">기간 정해서 만들기</a>`
+          : starting.kind === 'rest'
+            ? html`<a class="btn btn-primary" href="${newPlanHref(starting.start, starting.end)}">오늘부터 ${now.m}월 ${starting.end.d}일까지</a>
+                <a class="btn btn-ghost" href="${monthHref}">${now.m}월 전체로 만들기</a>`
+            : html`<a class="btn btn-primary" href="${fromToday}">오늘부터 30일 계획 만들기</a>
+                <a class="btn btn-ghost" href="#/new/${ymKey(nextMonth.y, nextMonth.m)}">${nextMonth.m}월 계획 만들기</a>`;
       // 읽기 계획이 없으면 오늘의 통독 대신 오늘의 말씀을 보여 주고, 계획 만들기를 권한다.
       setHTML(
         root,
         html`${head}
-          ${yearVerseBox(now)}
-          ${dailyVerseBlock()}
+          ${yvTop}
           <section class="plan-cta">
             <h2>오늘의 통독을 시작해 보세요</h2>
             <p>읽고 싶은 성경 범위를 고르면 날마다 고르게 나누어 드립니다. 계획을 만들면 이 자리에 오늘 읽을 분량이 나옵니다.</p>
-            <div class="button-row is-center">
-              ${monthFree
-                ? html`<a class="btn btn-primary" href="#/new/${ymKey(now.y, now.m)}">${now.m}월 계획 만들기</a>
-                    <a class="btn btn-ghost" href="${fromToday}">기간 정해서 만들기</a>`
-                : html`<a class="btn btn-primary" href="${fromToday}">오늘부터 계획 만들기</a>`}
-            </div>
+            <div class="button-row is-center">${ctaButtons}</div>
           </section>
           ${upcomingPlan
             ? html`<a class="card card-link" href="#/month/${ymKey(upcomingPlan.start.y, upcomingPlan.start.m)}">
@@ -181,8 +196,10 @@ export async function todayView(root) {
                 <span class="chev" aria-hidden="true">›</span>
               </a>`
             : ''}
+          ${dailyVerseBlock()}
           ${roomArea(now)}
-          ${othersBlock}`,
+          ${othersBlock}
+          ${yvBottom}`,
       );
       fillDailyVerse();
       return;
@@ -260,7 +277,7 @@ export async function todayView(root) {
     setHTML(
       root,
       html`${head}
-        ${yearVerseBox(now)}
+        ${yvTop}
         <h2 class="block-title today-label">오늘의 통독</h2>
         ${todayCard}
         ${entry.segments.length ? '' : dailyVerseBlock()}
@@ -279,8 +296,6 @@ export async function todayView(root) {
           <span style="width:${progress.percent}%"></span>
         </div>
         ${isParallel(plan) ? progressSection(plan) : ''}
-        ${roomArea(now)}
-        ${othersBlock}
         ${missed.length
           ? html`<section class="block" id="missed">
               <h2 class="block-title">밀린 읽기 <span class="badge">${missed.length}</span></h2>
@@ -291,6 +306,8 @@ export async function todayView(root) {
               </div>
             </section>`
           : ''}
+        ${roomArea(now)}
+        ${othersBlock}
         ${upcoming.length
           ? html`<section class="block">
               <h2 class="block-title">다가오는 읽기</h2>
@@ -301,7 +318,8 @@ export async function todayView(root) {
             </section>`
           : ''}
         ${nextCard}
-        ${roomCreateCard(plan)}`,
+        ${roomCreateCard(plan)}
+        ${yvBottom}`,
     );
     fillDailyVerse(); // 쉬는 날에는 오늘의 말씀을 함께 보여 준다
   };

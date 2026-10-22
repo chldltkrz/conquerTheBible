@@ -98,13 +98,13 @@ const SHOT_LIST = [
   {
     name: 'start',
     demo: 'fresh',
-    marks: [m('section.year-verse'), m('.daily-verse'), m('.plan-cta'), m('nav.tabbar', { pad: 0 })],
+    marks: [m('.plan-cta'), m('.daily-verse'), m('nav.tabbar', { pad: 0 })],
   },
   // 2 읽기 계획 만들기
   {
     name: 'new-top',
     demo: 'fresh',
-    hash: '#/new',
+    hash: '#/new/2026-10', // 한 달 화면 (달 중간의 #/new는 오늘부터로 시작한다)
     marks: [m('header.month-head'), m('.mode-tabs'), m('.mode-cards')],
   },
   {
@@ -149,7 +149,7 @@ const SHOT_LIST = [
   {
     name: 'new-preview',
     demo: 'fresh',
-    hash: '#/new',
+    hash: '#/new/2026-10', // 지난 날짜가 밀린 읽기로 들어가는 안내까지 보이게 10월 한 달로
     prep: async (p) => {
       await click(p, '[data-preset]', '복음서');
       await click(p, '[data-action="preview"]');

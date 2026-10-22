@@ -287,7 +287,7 @@ main:focus-visible {
 }
 
 .btn-sm {
-  min-height: 36px;
+  min-height: 40px;
   padding: 0 12px;
   font-size: 14px;
 }
@@ -325,12 +325,20 @@ main:focus-visible {
 }
 
 .link {
+  position: relative;
   border: 0;
   background: none;
   padding: 4px 0;
   color: var(--accent);
   font-size: 14px;
   font-weight: 700;
+}
+
+/* 글자로 된 버튼은 작아 보여도 손가락으로 누르기 쉽게, 배치는 그대로 두고 눌리는 영역만 넓힌다 (높이 44px 안팎) */
+.link::after {
+  content: '';
+  position: absolute;
+  inset: -8px -6px;
 }
 
 .link.danger {
@@ -434,7 +442,7 @@ main:focus-visible {
 
 .more-link {
   display: block;
-  padding: 12px 4px 0;
+  padding: 12px 4px 8px;
   color: var(--accent);
   font-weight: 700;
   font-size: 15px;
@@ -566,6 +574,10 @@ main:focus-visible {
   text-align: center;
 }
 
+.yv-later {
+  margin-top: 28px;
+}
+
 .yv-label {
   margin: 0;
   font-size: 12.5px;
@@ -606,10 +618,10 @@ main:focus-visible {
 /* 상자 오른쪽 위의 바꾸기 버튼 */
 .yv-edit {
   position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 38px;
-  height: 38px;
+  top: 3px;
+  right: 3px;
+  width: 44px;
+  height: 44px;
 }
 
 .yv-edit svg {
@@ -1008,11 +1020,12 @@ button.stat:active {
 }
 
 .check {
+  position: relative;
   flex: none;
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   border: 2px solid var(--line);
   background: transparent;
@@ -1024,6 +1037,13 @@ button.stat:active {
   width: 20px;
   height: 20px;
   stroke-width: 3;
+}
+
+.check::after {
+  content: '';
+  position: absolute;
+  inset: -4px; /* 눌리는 영역 48px */
+  border-radius: 50%;
 }
 
 .check:hover {
@@ -1111,7 +1131,7 @@ button.stat:active {
 }
 
 .cal-cell small {
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.25;
   color: var(--ink-2);
   display: -webkit-box;
@@ -1511,7 +1531,7 @@ button.stat:active {
 }
 
 .font-ctl sup {
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .scripture {
@@ -1606,7 +1626,7 @@ button.stat:active {
   cursor: pointer;
   color: var(--muted);
   font-weight: 600;
-  padding: 4px 0;
+  padding: 10px 0;
 }
 
 .notes ol {
@@ -1713,7 +1733,7 @@ button.stat:active {
 
 .segmented button {
   min-width: 64px;
-  height: 34px;
+  height: 40px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -2034,7 +2054,7 @@ button.stat:active {
 
 .tr-switch button {
   min-width: 0;
-  height: 32px;
+  height: 38px;
   padding: 0 14px;
   font-size: 14px;
 }
@@ -2223,9 +2243,20 @@ button.stat:active {
   color: var(--muted);
 }
 
+.saved-foot small {
+  font-size: inherit; /* 저장한 시각: 브라우저 기본 <small>(0.83배)이면 11px도 안 된다 */
+}
+
 .saved-foot summary {
+  position: relative;
   cursor: pointer;
   padding: 4px 0;
+}
+
+.saved-foot summary::after {
+  content: '';
+  position: absolute;
+  inset: -8px 0; /* 배치는 그대로, 눌리는 영역만 넓힌다 */
 }
 
 .saved-foot ol {
@@ -2839,7 +2870,7 @@ body:has(.select-bar:not([hidden])) .toast {
 
 .subtabs a {
   flex: 1;
-  padding: 8px 4px;
+  padding: 11px 4px;
   border-radius: 9px;
   color: var(--muted);
   font-size: 14px;
@@ -3130,7 +3161,7 @@ body:has(.tts-bar:not([hidden])) main {
   padding: 1px 7px;
   border-radius: 999px;
   font-family: var(--font-sans);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 700;
   line-height: 1.6;
   vertical-align: 1px;
@@ -3763,7 +3794,7 @@ a.mc-cell:active {
 
 .facts dd small {
   display: block;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--muted);
 }

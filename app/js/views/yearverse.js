@@ -16,7 +16,10 @@ function thisYears(now) {
   return saved?.year === now.y && saved.text ? saved : null;
 }
 
-/** 오늘 화면 위쪽 상자 */
+/** 올해의 말씀을 정했는지 (정했으면 오늘 화면 맨 위, 아직이면 맨 아래에 정하기 상자를 둔다) */
+export const hasYearVerse = (now = today()) => !!thisYears(now);
+
+/** 오늘 화면의 올해의 말씀 상자 */
 export function yearVerseBox(now = today()) {
   const mine = thisYears(now);
   return html`<section class="year-verse ${mine ? '' : 'is-empty'}" aria-label="${now.y}년 올해의 말씀">

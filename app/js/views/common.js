@@ -8,6 +8,8 @@ import {
   formatDate,
   formatPeriod,
   isWholeMonth,
+  monthEnd,
+  monthStart,
   toISO,
   today,
   weekday,
@@ -40,6 +42,18 @@ export const newPlanHref = (start, end) =>
   isWholeMonth(start, end) ? `#/new/${ymKey(start.y, start.m)}` : `#/new/${toISO(start)}/${toISO(end)}`;
 
 // ── 계획 기간 ──────────────────────────────────────────────
+
+/**
+ * 이번 달에 계획이 없을 때 처음 권할 기간. 달 초(3일까지)는 이번 달 전체로 하고, 그 뒤로는 지난 날짜가
+ * 처음부터 "밀림"으로 쌓이지 않도록 오늘부터 이번 달 말까지, 남은 날이 열흘보다 적으면 오늘부터 30일.
+ * @returns {{kind: 'month'|'rest'|'thirty', start, end}}
+ */
+export function startingPeriod(now = today()) {
+  const end = monthEnd(now.y, now.m);
+  if (now.d <= 3) return { kind: 'month', start: monthStart(now.y, now.m), end };
+  if (daysBetween(now, end) + 1 >= 10) return { kind: 'rest', start: now, end };
+  return { kind: 'thirty', start: now, end: addDays(now, 29) };
+}
 
 /** 그 날짜의 분량. 계획 기간 밖이면 null */
 export const entryOn = (plan, date) => plan.days[daysBetween(plan.start, date)] ?? null;

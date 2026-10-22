@@ -44,7 +44,7 @@ import {
 import { buildGroupPlan, buildParallelPlan, buildPlan } from '../planner.js';
 import { translationsFor } from '../prefs.js';
 import { confirmDialog, formatNumber, html, setHTML, toast } from '../ui.js';
-import { accountPrefix, dayDate, dayList, newPlanHref, periodLabel } from './common.js';
+import { accountPrefix, dayDate, dayList, newPlanHref, periodLabel, startingPeriod } from './common.js';
 import { track } from '../analytics.js';
 import { resumeRoomCreate, roomCreatePending } from './roomsection.js';
 
@@ -93,6 +93,14 @@ const modeArt = (lanes) => html`<span class="mode-art" aria-hidden="true">
 /** 주소: #/new (이번 달), #/new/2026-10 (그 달), #/new/2026-10-15/2026-11-23 (기간을 정해서) */
 export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
   const now = today();
+  // 주소에 기간이 없고(#/new) 이번 달이 비어 있으면, 달 중간에는 지난 날짜가 "밀림"으로 쌓이지 않게 오늘부터 시작한다.
+  if (y == null && !plansOverlapping(monthStart(now.y, now.m), monthEnd(now.y, now.m)).length) {
+    const starting = startingPeriod(now);
+    if (starting.kind !== 'month') {
+      ({ y, m, d } = starting.start);
+      ({ y: y2, m: m2, d: d2 } = starting.end);
+    }
+  }
   const customRoute = d != null;
   // 2월 30일처럼 없는 날짜는 실제 날짜로 맞춘다.
   const routeStart = customRoute ? addDays({ y, m, d }, 0) : null;
