@@ -30,12 +30,23 @@ import {
   today,
   ymKey,
 } from '../dates.js';
-import { currentAccount, listPlans, MAX_PLAN_DAYS, partKey, planTrackDays, plansOverlapping, roomMemberships, savePlan } from '../db.js';
+import {
+  currentAccount,
+  getPlan,
+  listPlans,
+  MAX_PLAN_DAYS,
+  partKey,
+  planTrackDays,
+  plansOverlapping,
+  roomMemberships,
+  savePlan,
+} from '../db.js';
 import { buildGroupPlan, buildParallelPlan, buildPlan } from '../planner.js';
 import { translationsFor } from '../prefs.js';
 import { confirmDialog, formatNumber, html, setHTML, toast } from '../ui.js';
 import { accountPrefix, dayDate, dayList, newPlanHref, periodLabel } from './common.js';
 import { track } from '../analytics.js';
+import { resumeRoomCreate, roomCreatePending } from './roomsection.js';
 
 // 기간을 직접 정할 때 시작일부터 바로 고르는 길이
 const LENGTHS = [
@@ -311,7 +322,10 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
               ${overlaps.map((p, i) => html`${i ? ', ' : ''}<b>${p.title}</b> (${periodLabel(p)})`)}.
               새로 저장하면 겹치는 계획은 지워지고, 같은 날짜에 같은 범위를 읽은 기록만 이어집니다.</p>`
           : ''}
-      ${roomNotice(start, end)}`;
+      ${roomNotice(start, end)}
+      ${roomCreatePending()
+        ? html`<p class="notice">계획을 저장하면 이 계획으로 함께 읽기 방을 만드는 창이 이어서 뜹니다.</p>`
+        : ''}`;
   };
 
   /** 이 기간에 함께 읽기 방에서 읽고 있으면: 계획을 바꾸면 방 사람들과 분량이 달라진다 */
@@ -724,8 +738,9 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     } catch {
       /* 사용 통계용 값이라 못 구해도 저장은 계속한다 */
     }
+    let id;
     try {
-      await savePlan({
+      id = await savePlan({
         start,
         end,
         title,
@@ -756,6 +771,7 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     );
     const running = compareDate(start, now) <= 0 && compareDate(now, end) <= 0;
     location.hash = running ? '#/' : `#/month/${ymKey(start.y, start.m)}`;
+    resumeRoomCreate(getPlan(id)); // 함께 읽기 방 만들기 창에서 왔으면 이 계획으로 다시 띄운다
   };
 
   root.onclick = async (e) => {

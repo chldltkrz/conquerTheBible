@@ -1,7 +1,19 @@
 // 함께 읽기 방 화면: 오늘 화면의 방 소식("오늘 5명 중 3명 읽음"), 방 창(멤버마다 이번 주 읽음과 진도),
 // 방 만들기·초대 코드로 들어가기·초대하기 창, 설정 화면의 "함께 읽기" 칸. 서버와 주고받는 것은 ../rooms.js.
 
-import { addDays, compareDate, formatDate, formatDay, today, toISO, weekday, WEEKDAYS } from '../dates.js';
+import {
+  addDays,
+  compareDate,
+  daysBetween,
+  formatDate,
+  formatDay,
+  monthEnd,
+  monthStart,
+  today,
+  toISO,
+  weekday,
+  WEEKDAYS,
+} from '../dates.js';
 import { currentAccount, listAccounts, listPlans, planOn, roomMemberships } from '../db.js';
 import {
   createRoom,
@@ -27,7 +39,7 @@ import {
 import { normalizeCode } from '../sync.js';
 import { confirmDialog, copyText, createSheet, html, setHTML, toast } from '../ui.js';
 import { track } from '../analytics.js';
-import { avatar, checkIcon, periodLabel } from './common.js';
+import { avatar, checkIcon, isMonthPlan, newPlanHref, periodLabel } from './common.js';
 import { renderQr } from './syncsection.js';
 
 export const roomIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2.5 20a6.5 6.5 0 0 1 13 0M16 4.3a3.5 3.5 0 0 1 0 6.4M18.5 14.2a6.5 6.5 0 0 1 3 5.8" /></svg>`;
@@ -402,70 +414,141 @@ export function openInviteDialog(m, { fresh = false } = {}) {
 
 // ── 방 만들기 ──────────────────────────────────────────────
 
-/** 방을 만들 계획: 오늘 읽는 계획, 없으면 앞으로 시작할 가장 가까운 계획 */
-export function roomPlanCandidate(now = today()) {
-  return planOn(now) ?? listPlans().filter((p) => compareDate(p.start, now) > 0).at(-1) ?? null;
+/** 방을 만들 수 있는 계획: 오늘 읽는 계획과 앞으로 시작할 계획들 (일찍 시작하는 것부터) */
+export function roomPlanChoices(now = today()) {
+  return listPlans()
+    .filter((p) => compareDate(p.end, now) >= 0)
+    .sort((a, b) => compareDate(a.start, b.start));
+}
+
+/** 그 계획들 다음에 이어 만들 계획: 마지막 계획 다음 날부터 같은 길이(한 달 계획이면 다음 달). 계획이 없으면 이번 달 */
+function nextPlanPeriod(plans, now) {
+  const last = plans.at(-1);
+  if (!last) return { start: monthStart(now.y, now.m), end: monthEnd(now.y, now.m), label: `${now.m}월 계획` };
+  const start = addDays(last.end, 1);
+  if (isMonthPlan(last)) return { start, end: monthEnd(start.y, start.m), label: `${start.m}월 계획` };
+  return { start, end: addDays(start, last.length - 1), label: `${formatDate(start)}부터 ${last.length}일 계획` };
+}
+
+// 방 만들기 창에서 "새로 만들기"로 새 계획 화면에 가면, 그 계획을 저장한 뒤 방 만들기 창을 다시 띄운다.
+let pendingCreate = null; // 창에 적던 {name, memberName}
+
+/** 새 계획 화면: 저장하면 방 만들기 창이 이어서 뜨는지 */
+export const roomCreatePending = () => pendingCreate != null;
+
+/** 새 계획 화면에서 계획을 저장한 뒤 부른다. 방 만들기 창에서 왔으면 그 계획을 고른 창을 다시 띄운다 */
+export function resumeRoomCreate(plan) {
+  if (!pendingCreate || !plan) return;
+  const typed = pendingCreate;
+  pendingCreate = null;
+  openRoomCreate(plan, typed);
+}
+
+if (typeof window !== 'undefined') {
+  // 계획을 저장하지 않고 다른 화면으로 가면 잊는다
+  window.addEventListener('hashchange', () => {
+    if (!location.hash.startsWith('#/new')) pendingCreate = null;
+  });
+}
+
+function planStatus(p, now, rooms) {
+  const when = compareDate(p.start, now) > 0 ? `${formatDate(p.start)}에 시작` : '읽는 중';
+  return rooms.length ? `${when} · ${rooms.map((m) => m.name).join(', ')} 방` : when;
 }
 
 /**
- * 계획으로 방을 만드는 창. 만들면 초대 창을 띄운다.
- * @param {() => void} [done] 만든 뒤 부른다 (화면을 다시 그린다)
+ * 방을 만드는 창. 지금 계정의 오늘 계획과 앞으로 시작할 계획 중에서 고르고, 다음 계획이 아직 없으면
+ * 새 계획 화면에서 만든 뒤 돌아온다. 만들면 초대 창을 띄운다.
+ * @param {object|null} plan 먼저 골라 둘 계획 (없으면 아직 방이 없는 가장 이른 계획)
+ * @param {{done?: () => void, name?: string, memberName?: string}} [opts] done: 만든 뒤 부른다 (화면을 다시 그린다)
  */
-export function openRoomCreate(plan, done = () => {}) {
-  const acc = listAccounts().find((a) => a.id === plan.accountId) ?? currentAccount();
+export function openRoomCreate(plan = null, { done = () => {}, name = '', memberName = null } = {}) {
+  const now = today();
+  const acc = currentAccount();
+  const plans = roomPlanChoices(now);
+  const rooms = roomMemberships(acc.id);
+  const roomsOf = (p) => rooms.filter((m) => periodsOverlap(m, p));
+  const chosen = plans.find((p) => p.id === plan?.id) ?? plans.find((p) => !roomsOf(p).length) ?? plans[0];
+  const next = nextPlanPeriod(plans, now);
   const dlg = document.createElement('dialog');
   dlg.className = 'dialog room-form';
   setHTML(
     dlg,
     html`<form>
       <h2>함께 읽기 방 만들기</h2>
-      <p><b>${plan.title}</b> 계획(${periodLabel(plan)})을 함께 읽을 방을 만듭니다.
-        초대받은 사람에게는 같은 계획이 만들어지고, 서로 오늘 읽었는지 볼 수 있습니다.</p>
+      <p>함께 읽을 계획을 고르세요. 초대받은 사람에게는 같은 계획이 만들어지고, 서로 오늘 읽었는지 볼 수 있습니다.</p>
+      ${plans.length
+        ? html`<div class="room-plans" role="radiogroup" aria-label="함께 읽을 계획">
+            ${plans.map(
+              (p) => html`<label class="room-plan">
+                <input type="radio" name="plan" value="${p.id}" ${p === chosen ? 'checked' : ''} />
+                <span><b>${p.title}</b><small>${periodLabel(p, { year: p.start.y !== now.y })} · ${planStatus(p, now, roomsOf(p))}</small></span>
+              </label>`,
+            )}
+          </div>`
+        : html`<p class="muted small">함께 읽을 계획이 아직 없습니다. 먼저 계획을 만들어 주세요.</p>`}
+      <button type="button" class="room-plan is-new" data-new-plan>
+        <span><b>${next.label} 새로 만들기</b><small>계획을 저장하면 이 창으로 돌아옵니다</small></span>
+        <span class="chev" aria-hidden="true">›</span>
+      </button>
       <label class="field">
         <span>방 이름</span>
-        <input name="name" maxlength="${ROOM_NAME_MAX}" placeholder="예: 사랑구역, 우리 가족" required autocomplete="off" />
+        <input name="name" value="${name}" maxlength="${ROOM_NAME_MAX}" placeholder="예: 사랑구역, 우리 가족" required autocomplete="off" />
       </label>
       <label class="field">
         <span>방에서 보일 내 이름</span>
-        <input name="member" value="${acc.name}" maxlength="${MEMBER_NAME_MAX}" required autocomplete="off" />
+        <input name="member" value="${memberName || acc.name}" maxlength="${MEMBER_NAME_MAX}" required autocomplete="off" />
       </label>
       <p class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
         <button type="button" class="btn btn-ghost" data-close>취소</button>
-        <button class="btn btn-primary">만들기</button>
+        <button class="btn btn-primary" ${plans.length ? '' : 'disabled'}>만들기</button>
       </div>
     </form>`,
   );
   const form = dlg.querySelector('form');
   const error = dlg.querySelector('.form-error');
-  dlg.addEventListener('click', (e) => e.target.closest('[data-close]') && dlg.close());
+  dlg.addEventListener('click', (e) => {
+    if (e.target.closest('[data-close]')) return dlg.close();
+    if (e.target.closest('[data-new-plan]')) {
+      pendingCreate = { name: form.name.value.trim(), memberName: form.member.value.trim() };
+      dlg.close();
+      track('room_plan_new');
+      location.hash = newPlanHref(next.start, next.end);
+    }
+  });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const picked = plans.find((p) => String(p.id) === form.querySelector('input[name=plan]:checked')?.value);
     const name = form.name.value.trim();
     const memberName = form.member.value.trim();
-    if (!name || !memberName) return;
+    if (!picked || !name || !memberName) return;
     const submit = form.querySelector('.btn-primary');
     submit.disabled = true;
     error.hidden = true;
     let code;
     try {
-      code = await createRoom(plan, { name, memberName });
+      code = await createRoom(picked, { name, memberName });
     } catch (err) {
       error.textContent = err.message;
       error.hidden = false;
       submit.disabled = false;
       return;
     }
-    track('room_created', { plan_mode: plan.mode, plan_length: plan.length });
+    track('room_created', {
+      plan_mode: picked.mode,
+      plan_length: picked.length,
+      starts_in_days: Math.max(0, daysBetween(now, picked.start)),
+    });
     dlg.close();
     done();
-    const m = roomMemberships(plan.accountId).find((x) => x.code === code);
+    const m = roomMemberships(picked.accountId).find((x) => x.code === code);
     if (m) openInviteDialog(m, { fresh: true });
   });
   dlg.addEventListener('close', () => dlg.remove());
   document.body.append(dlg);
   dlg.showModal();
-  form.name.focus();
+  (name ? form.member : form.name).focus();
 }
 
 // ── 초대 코드로 들어가기 ───────────────────────────────────
@@ -641,11 +724,5 @@ export function roomSection() {
  */
 export function handleRoomAction(action, rerender) {
   if (action === 'join') return openRoomJoin('', { done: rerender });
-  if (action !== 'create') return;
-  const plan = roomPlanCandidate();
-  if (!plan) {
-    toast('먼저 함께 읽을 계획을 만들어 주세요');
-    return;
-  }
-  openRoomCreate(plan, rerender);
+  if (action === 'create') openRoomCreate(null, { done: rerender });
 }

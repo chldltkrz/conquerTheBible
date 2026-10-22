@@ -356,7 +356,7 @@ export async function todayView(root) {
     if (room) return openRoomSheet(room.dataset.roomOpen, render);
     if (e.target.closest('[data-action="room-create"]')) {
       const plan = planOn(today());
-      return plan && openRoomCreate(plan, render);
+      return plan && openRoomCreate(plan, { done: render });
     }
     return onToggle(e);
   };

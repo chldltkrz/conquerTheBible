@@ -4285,6 +4285,64 @@ a.mc-cell:active {
   color: var(--muted);
 }
 
+/* 방 만들기: 함께 읽을 계획 고르기 */
+.room-plans {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.room-plan {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.room-plan:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.room-plan input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.room-plan > span:first-of-type {
+  flex: 1;
+  min-width: 0;
+}
+
+.room-plan b,
+.room-plan small {
+  display: block;
+}
+
+.room-plan small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.room-plan.is-new {
+  margin-top: 8px;
+  border-style: dashed;
+  background: none;
+}
+
+.room-plan.is-new b {
+  color: var(--accent);
+}
+
 /* ── 말씀 공유 창 (말씀 카드) ─────────────────────────── */
 .card-preview {
   display: flex;

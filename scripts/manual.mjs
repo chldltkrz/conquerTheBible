@@ -580,7 +580,13 @@ const SHOT_LIST = [
       await click(p, '[data-action="room-create"]');
       await p.fill('dialog[open] [name=name]', '사랑구역');
     },
-    marks: [m('dialog[open] .field', { nth: 0 }), m('dialog[open] .field', { nth: 1 }), m('dialog[open] .dialog-actions .btn-primary')],
+    marks: [
+      m('dialog[open] .room-plans'),
+      m('dialog[open] [data-new-plan]'),
+      m('dialog[open] .field', { nth: 0 }),
+      m('dialog[open] .field', { nth: 1 }),
+      m('dialog[open] .dialog-actions .btn-primary'),
+    ],
   },
   {
     name: 'room-invite',
