@@ -68,8 +68,13 @@
   이 기기로 알림을 보냅니다. 알림에는 남은 분량("창세기 1–3장 · 약 12분")이 나오고, 누르면 앱이 열립니다.
   다 읽은 날과 읽을 분량이 없는 날(계획 없음, 쉬는 날)에는 보내지 않습니다. 켜고 끈 것과 시각은 기기마다 따로 둡니다.
   아이폰·아이패드는 홈 화면에 추가한 앱(iOS 16.4 이상)에서 켤 수 있습니다. 자세한 것은 아래 [읽기 알림](#읽기-알림).
+- **함께 읽기 방**: 가족·구역·목장 사람들과 같은 계획을 함께 읽으며 오늘 누가 읽었는지 봅니다("오늘 5명 중 3명 읽음").
+  오늘 화면 맨 아래나 설정 > 함께 읽기에서 지금 계획으로 방을 만들면 12자리 **초대 코드**와 QR 코드, 링크(`#room=코드`)가 나오고,
+  받은 사람이 링크를 열거나 코드를 넣으면 같은 계획이 그 계정에 만들어집니다(같은 계획이 있으면 그대로 씁니다).
+  오늘 화면에 방 사람마다 오늘 읽음(✓·읽는 중 %·아직)이, 방 창에 최근 7일과 전체 진도가 보입니다. 방 사람들에게는 방에서 쓰는 이름과
+  날짜별 읽음, 진도만 보이고 메모·저장한 구절은 보이지 않습니다. 한 방에 30명까지. 자세한 것은 아래 [함께 읽기 방](#함께-읽기-방).
 
-사용자용 설명서(실제 화면 사진과 메뉴별 사용법, PDF 34쪽)는 [app/docs/user-manual.pdf](app/docs/user-manual.pdf)에 있고,
+사용자용 설명서(실제 화면 사진과 메뉴별 사용법, PDF 38쪽)는 [app/docs/user-manual.pdf](app/docs/user-manual.pdf)에 있고,
 앱의 **설정 > 사용설명서**에서 바로 열 수 있습니다. 만드는 법은 아래 [사용설명서 만들기](#사용설명서-만들기).
 
 ## 시작하기
@@ -161,6 +166,7 @@ set -a; . /etc/conquer-the-bible/sync.env; set +a; npm test
 | `day_notes` | 날짜별 묵상 메모 (그날 읽은 범위 포함). 계획을 다시 만들어도 남는다 |
 | `verse_notes` | 저장한 구절에 단 메모 (절마다 하나) |
 | `settings` | 글자 크기, 글꼴, 역본, 지금 계정 (기기 공통), 계정마다의 올해의 말씀(`yearVerse:계정번호`) |
+| `room_memberships` | 계정마다 들어간 함께 읽기 방: 초대 코드, 방 안의 멤버 번호와 키, 방 이름, 방에서 쓰는 이름, 방의 계획 기간 |
 | `sync_state` | 기기 간 동기화 상태: 동기화 코드, 받은 마지막 번호(cursor) 등. 동기화하지 않으면 비어 있다 |
 | `sync_outbox` | 동기화하는 동안 바뀌어 아직 보내지 않은 줄의 표 이름과 기본 키 (트리거가 적는다) |
 
@@ -174,7 +180,7 @@ set -a; . /etc/conquer-the-bible/sync.env; set +a; npm test
 
 ```sh
 npx playwright install chromium      # 처음 한 번 (헤드리스 크롬)
-npm run manual                       # 화면 52장을 찍고 app/docs/user-manual.pdf를 만든다 (몇 분)
+npm run manual                       # 화면 59장을 찍고 app/docs/user-manual.pdf를 만든다 (몇 분)
 npm run manual -- --only card,export # 그 화면만 다시 찍고 PDF
 npm run manual -- --pdf              # 글만 고쳤으면 찍어 둔 화면으로 PDF만
 ```
@@ -183,7 +189,7 @@ npm run manual -- --pdf              # 글만 고쳤으면 찍어 둔 화면으�
   저장한 구절, 묵상 메모, 올해의 말씀을 만들어 앱의 "가져오기"와 같은 방식으로 넣습니다. 오늘은 2026년 10월 17일로 정해 두고 브라우저의 시각도
   그날로 고정하므로, 다시 만들어도 같은 화면이 나옵니다.
 - **화면 찍기** (`scripts/manual.mjs`, `scripts/lib/manual-env.mjs`): app/를 임시 서버로 띄우고(운영 동기화 서버에 닿지 않도록 `/api/`는 가짜로
-  답한다), 휴대폰 크기(390×844)의 크롬으로 화면마다 정해 둔 동작을 한 뒤 설명할 곳에 빨간 테두리와 번호를 얹어 찍습니다. 사진은
+  답한다. 함께 읽기 방은 예시 계획을 함께 읽는 "사랑구역" 방이 있는 것처럼 답한다), 휴대폰 크기(390×844)의 크롬으로 화면마다 정해 둔 동작을 한 뒤 설명할 곳에 빨간 테두리와 번호를 얹어 찍습니다. 사진은
   `.cache/manual/shots/`에 둡니다. 헤드리스 크롬에 없는 휴대폰 공유 창·알림 허용·한국어 음성은 흉내 냅니다.
 - 화면 사진의 번호 순서(`SHOT_LIST`의 `marks`)와 글의 번호 목록(`ol.marks`) 순서가 짝이 맞아야 합니다. 새 화면을 넣으려면 `SHOT_LIST`에
   하나 더하고 글에 `<img src="shots/이름.jpg">`를 넣습니다. 찾지 못한 곳이 있으면 그 화면을 `*.failed.jpg`로 남기고 멈춥니다.
@@ -206,7 +212,7 @@ npm run manual -- --pdf              # 글만 고쳤으면 찍어 둔 화면으�
   받은 값보다 앞섭니다. 같은 날 같은 구절을 두 기기에서 저장하면 하나만 남기고, 같은 계정에 기간이 겹치는 계획을
   두 기기에서 따로 만들면 나중에 만든 계획을 남기며 같은 날짜·범위의 읽음 기록은 그 계획으로 옮깁니다.
   지워진 계획에 읽음 표시한 것처럼 부모가 없는 줄은 버립니다.
-- **새로 더한 표**: 예전 서버는 모르는 표가 든 요청을 통째로 거절하므로, 뒤에 더한 표(`reading_progress`)는
+- **새로 더한 표**: 예전 서버는 모르는 표가 든 요청을 통째로 거절하므로, 뒤에 더한 표(`reading_progress`, `room_memberships`)는
   서버 응답의 `tables`에 그 표가 있을 때만 보냅니다(`SYNC_TABLES`의 `optional`). 앱만 먼저 배포해도 동기화는 멈추지 않고,
   서버를 새로 배포한 뒤부터 그 표도 맞춰집니다. 표를 더할 때는 서버의 `TABLES`에도 더합니다.
 - **끄기**: "이 기기만 끄기"는 이 기기의 동기화만 멈춥니다. "모든 기기에서 끄기"는 서버 기록을 지우고,
@@ -258,11 +264,47 @@ VAPID 키는 한 번 만들어 `/etc/conquer-the-bible/sync.env`에 둡니다. �
 cd server && node -e "const k=require('web-push').generateVAPIDKeys(); console.log('VAPID_PUBLIC_KEY='+k.publicKey+'\nVAPID_PRIVATE_KEY='+k.privateKey)"
 ```
 
+## 함께 읽기 방
+
+같은 계획을 여럿이 함께 읽으며 서로 오늘 읽었는지 봅니다. 읽기 알림처럼 **기기가 날짜별 읽음을 계산해 올리고 서버는 보관만** 합니다.
+
+- **초대 코드**: 동기화 코드와 꼴(12자리, 서버에는 SHA-256 해시만)은 같지만 따로 만든 코드입니다. 초대 코드로는 방 이름, 계획,
+  멤버 이름과 날짜별 읽음만 보고 방에 들어올 수 있습니다. 동기화 코드처럼 기록 전체에 닿는 열쇠가 아니라서 단톡방에 올려도 됩니다.
+  링크(`https://…/#room=코드`)는 `#` 뒤에 두어 서버로 가지 않고, 앱을 열면(앱이 열려 있을 때 주소만 바뀌어도) 주소에서 바로 지웁니다.
+- **멤버 키**: 방에 들어오면 서버가 멤버 번호와 키를 줍니다. 내 상태를 올리거나 나갈 때 `X-Room-Member: 번호:키`를 보내므로
+  다른 사람의 줄은 고칠 수 없습니다. 방장(만든 사람)만 멤버를 내보내거나 방을 없앱니다. 방장이 나가면 다음으로 들어온 사람이 방장이 되고,
+  아무도 남지 않으면 방이 없어집니다. 400일 동안 아무도 상태를 올리지 않은 방은 지웁니다.
+- **방의 계획**: 날짜별 분량 대신 묶음마다 고른 장(`{title, start, end, mode, selection, tracks: [{title, selection}]}`)을 둡니다.
+  들어오는 사람은 같은 알고리즘(`planner.js`)으로 똑같이 나눕니다. 기간·읽는 방식·묶음마다 읽는 장이 같은 계획이 이미 있으면
+  그 계획을 그대로 쓰고(밀린 분량을 다시 나눈 계획도), 없으면 방의 계획을 저장합니다(겹치는 계획은 새 계획을 만들 때처럼 바뀝니다).
+  같은 기간에 다른 계획으로 다른 방에서 읽고 있으면 들어가지 못합니다.
+- **기기** (`app/js/rooms.js`, 화면은 `app/js/views/roomsection.js`): 들어간 방은 `room_memberships`에 두고 동기화하므로, 내 다른 기기에서
+  읽어도 같은 멤버로 올라갑니다. 방의 기간 동안 그 계정의 계획을 날마다 보아 `days: {"2026-10-22": 40}`(그날 분량을 몇 퍼센트 읽었는지, 다
+  읽으면 100)와 계획 전체 진도를 계산해, 기록을 바꾸고 2초 뒤·앱을 떠날 때·인터넷이 다시 될 때 바뀐 것이 있으면 올립니다. 계획을 고쳐
+  저장해도 기간으로 잇습니다. 방 소식은 앱을 열 때·돌아올 때·켜 둔 동안 1분마다 받습니다. 내 줄은 서버 소식 대신 이 기기의 기록으로 바로 보여 줍니다.
+- **몇 명 중 몇 명**: 그날 분량이 있는 멤버 중 100인 멤버 수입니다. 아직 한 번도 올리지 않은 멤버는 방의 계획에 그날 분량이 있으면 "아직"으로 셉니다.
+- 방이 없어졌거나 내보내졌으면 다음에 받을 때 목록에서 빼고 알려 줍니다. 나가거나 내보내져도 그 계정의 계획과 기록은 남습니다.
+  계정을 지우거나 모든 기록을 지우면 들어간 방에서 먼저 나옵니다.
+
+| 요청 | 내용 |
+| --- | --- |
+| `POST /api/rooms` | `{name, plan, member: {name, color}}` 방을 만든다 → `{code, member: {id, key}}` (만든 사람이 방장) |
+| `GET /api/rooms/room` | `{name, plan, createdAt, members: [{id, name, color, owner, days, progress, joinedAt, updatedAt}]}` |
+| `POST /api/rooms/members` | `{name, color}` 방에 들어온다 → `{id, key}` (30명이 차면 409 `room_full`) |
+| `PUT /api/rooms/members/me` | `{name, color, days, progress}` 내 상태를 올린다 (`days`는 400일까지) |
+| `DELETE /api/rooms/members/me` | 방에서 나간다 |
+| `DELETE /api/rooms/members/<번호>` | 방장이 멤버를 내보낸다 |
+| `DELETE /api/rooms/room` | 방장이 방을 없앤다 |
+
+방 만들기 말고는 `Authorization: Bearer <초대 코드>`, 멤버만 하는 요청은 `X-Room-Member`도 보냅니다. 서버(`server/rooms.mjs`)는 동기화 서버에
+붙어 있고, 시작할 때 표(`reading_rooms`, `room_members`)를 만듭니다. 방 이름은 30자, 멤버 이름은 20자까지입니다.
+
 ## 사용 통계
 
 - 어떤 기능을 얼마나 쓰는지 [PostHog](https://posthog.com)로 익명 이벤트를 보냅니다 (앱 열기, 화면 이동, 읽음 표시, 계획 만들기 등).
   PostHog는 `app/vendor/posthog.js`(no-external 빌드)로 함께 배포되며, 실행 중에 추가 스크립트를 받아오지 않습니다.
-- 보내지 않는 것: 계정 이름, 계획 이름, 묵상 메모·구절 메모 내용, 절 본문, 검색어, 백업 파일 이름, 음성 이름, 동기화 코드.
+- 보내지 않는 것: 계정 이름, 계획 이름, 묵상 메모·구절 메모 내용, 절 본문, 검색어, 백업 파일 이름, 음성 이름, 동기화 코드,
+  함께 읽기 방의 이름·초대 코드·멤버 이름.
   책 코드(`gen`, `psa` 등), 개수, 날짜 차이, 참/거짓, 기기 안에서 몇 번째 계정인지만 보냅니다.
 - 설정 화면의 "익명 사용 통계 보내기"를 끄면 아무것도 보내지 않습니다.
 - localhost, 사설 IP, `.test`·`.local` 같은 테스트 도메인(예: `ctb.test`)에서 열면 보내지 않고 브라우저 콘솔에 `[analytics]`로만 출력합니다 (콘솔 수준 "Verbose"에서 보임).
@@ -278,6 +320,7 @@ app/                  배포할 정적 사이트 (PWA)
   js/db.js            SQLite 스키마와 질의, 동기화할 줄 모으기·받은 줄 넣기
   js/sync.js          기기 간 동기화: 서버와 주고받기, 언제 할지
   js/reminder.js      읽기 알림: 날마다 알릴 내용 계산, 푸시 구독
+  js/rooms.js         함께 읽기 방: 서버와 주고받기, 날짜별 읽음 계산 (화면은 views/roomsection.js)
   js/bible.js         본문 불러오기, 구절 표기
   js/card.js          말씀 카드 그리기 (줄 나누기·글자 크기 맞추기, 공유 창은 views/cardsheet.js)
   js/notesexport.js   묵상 메모·저장한 구절 내보내기 (텍스트, 인쇄용 화면. 창은 views/exportsheet.js)
@@ -289,7 +332,9 @@ app/                  배포할 정적 사이트 (PWA)
 server/
   sync-server.mjs     기기 간 동기화 서버 (PostgreSQL)
   push.mjs            읽기 알림: 구독 받기, 시각에 맞춰 웹 푸시 보내기
-  http.mjs            두 서버가 함께 쓰는 HTTP 조각
+  rooms.mjs           함께 읽기 방: 방·멤버, 멤버마다 날짜별 읽음 보관
+  code.mjs            동기화 코드·초대 코드 만들기와 해시
+  http.mjs            서버들이 함께 쓰는 HTTP 조각
   conquer-the-bible-sync.service  systemd 서비스
 scripts/
   crawl.mjs           새번역 크롤러, lib/parse.mjs 파서
@@ -368,6 +413,11 @@ location /api/ {
     proxy_pass http://127.0.0.1:5690;
 }
 location = /api/sync/spaces {          # 새 코드 만들기는 더 적게
+    limit_req zone=ctb_sync_new burst=5 nodelay;
+    limit_req_status 429;
+    proxy_pass http://127.0.0.1:5690;
+}
+location = /api/rooms {                # 함께 읽기 방 만들기도 (다른 /api/rooms/…는 위의 /api/)
     limit_req zone=ctb_sync_new burst=5 nodelay;
     limit_req_status 429;
     proxy_pass http://127.0.0.1:5690;

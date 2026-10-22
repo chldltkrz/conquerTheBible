@@ -1,4 +1,4 @@
-// 오늘 화면: 오늘 분량, 진행률, 밀린 읽기, 다른 계정의 오늘 상태
+// 오늘 화면: 오늘 분량, 진행률, 함께 읽기 방, 밀린 읽기, 다른 계정의 오늘 상태
 
 import { formatSegments, readingMinutes } from '../bible.js';
 import {
@@ -19,6 +19,7 @@ import { track } from '../analytics.js';
 import { dailyVerseRef, loadPassage, passageRef, passageText } from '../verses.js';
 import { openStatSheet } from './stats.js';
 import { openYearVerseEditor, yearVerseBox } from './yearverse.js';
+import { openRoomCreate, openRoomSheet, roomArea, roomCreateCard } from './roomsection.js';
 
 // 진행 상황 칸을 누를 수 있다는 표시
 const moreIcon = html`<svg class="stat-more" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>`;
@@ -180,6 +181,7 @@ export async function todayView(root) {
                 <span class="chev" aria-hidden="true">›</span>
               </a>`
             : ''}
+          ${roomArea(now)}
           ${othersBlock}`,
       );
       fillDailyVerse();
@@ -277,6 +279,7 @@ export async function todayView(root) {
           <span style="width:${progress.percent}%"></span>
         </div>
         ${isParallel(plan) ? progressSection(plan) : ''}
+        ${roomArea(now)}
         ${othersBlock}
         ${missed.length
           ? html`<section class="block" id="missed">
@@ -297,7 +300,8 @@ export async function todayView(root) {
                 : '달력에서 일정 보기'} ›</a>
             </section>`
           : ''}
-        ${nextCard}`,
+        ${nextCard}
+        ${roomCreateCard(plan)}`,
     );
     fillDailyVerse(); // 쉬는 날에는 오늘의 말씀을 함께 보여 준다
   };
@@ -348,6 +352,12 @@ export async function todayView(root) {
     if (e.target.closest('[data-action="save-daily"]')) return saveDaily();
     const stat = e.target.closest('[data-stat]');
     if (stat) return openStatSheet(stat.dataset.stat);
+    const room = e.target.closest('[data-room-open]');
+    if (room) return openRoomSheet(room.dataset.roomOpen, render);
+    if (e.target.closest('[data-action="room-create"]')) {
+      const plan = planOn(today());
+      return plan && openRoomCreate(plan, render);
+    }
     return onToggle(e);
   };
   render();

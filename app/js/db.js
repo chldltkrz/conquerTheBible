@@ -42,6 +42,8 @@ export const SYNC_TABLES = [
   // 설정 중에서는 계정마다 두는 올해의 말씀만 맞춘다. 글자 크기·목소리·지금 계정은 기기마다 따로 둔다.
   { name: 'settings', key: ['key'], only: (x) => `${x}.key LIKE 'yearVerse:%'` },
   { name: 'reading_progress', key: ['plan_id', 'track', 'day'], since: 7, optional: true },
+  // 함께 읽기 방에 들어간 것도 맞춰서, 내 다른 기기에서 읽어도 같은 멤버로 방에 올린다.
+  { name: 'room_memberships', key: ['account_id', 'code'], since: 8, optional: true },
 ];
 
 /** 동기화하는 동안 바뀐 줄의 열쇠를 sync_outbox에 적는 트리거. since: 그 마이그레이션에서 더한 표만 (없으면 v6의 표) */
@@ -272,6 +274,23 @@ export const MIGRATIONS = [
     FOREIGN KEY (plan_id, track, day) REFERENCES plan_days(plan_id, track, day) ON DELETE CASCADE
   );
   ${syncTriggers(7)}
+  `,
+  // v8: 함께 읽기 방 (app/js/rooms.js). 계정마다 들어간 방과 그 방에서 쓰는 멤버 키.
+  //     방의 계획은 기간으로 잇는다: 계획을 고쳐 저장하면 번호가 바뀌어도, 그 기간의 계획을 읽은 것이 방에 올라간다.
+  `
+  CREATE TABLE room_memberships (
+    account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    code        TEXT    NOT NULL,              -- 방 초대 코드 'ABCD-EFGH-JKLM'
+    member_id   TEXT    NOT NULL,              -- 방 안에서 나를 가리키는 번호
+    member_key  TEXT    NOT NULL,              -- 내 상태를 올릴 때 쓰는 키
+    name        TEXT    NOT NULL,              -- 방 이름
+    member_name TEXT    NOT NULL,              -- 방에서 보이는 내 이름
+    start_date  TEXT    NOT NULL,              -- 함께 읽는 계획의 첫날 'YYYY-MM-DD'
+    end_date    TEXT    NOT NULL,
+    joined_at   TEXT    NOT NULL,
+    PRIMARY KEY (account_id, code)
+  );
+  ${syncTriggers(8)}
   `,
 ];
 
@@ -1169,6 +1188,56 @@ export const yearVerse = () => getSetting(yearVerseKey(accountId));
 /** 올해의 말씀을 저장한다. null이면 지운다. */
 export const saveYearVerse = (value) => setSetting(yearVerseKey(accountId), value ?? null);
 
+// ── 함께 읽기 방 ───────────────────────────────────────────
+// 서버와 주고받는 것은 rooms.js. 여기서는 이 기기에 둔 방 목록만 다룬다.
+
+const membershipFromRow = (r) => ({
+  accountId: r.account_id,
+  code: r.code,
+  memberId: r.member_id,
+  memberKey: r.member_key,
+  name: r.name,
+  memberName: r.member_name,
+  start: fromISO(r.start_date),
+  end: fromISO(r.end_date),
+  joinedAt: r.joined_at,
+});
+
+/** 들어간 방들 (계획이 일찍 시작하는 방부터). account를 주지 않으면 모든 계정 */
+export function roomMemberships(account = null) {
+  return all(
+    `SELECT * FROM room_memberships ${account == null ? '' : 'WHERE account_id = $a'} ORDER BY start_date, joined_at, code`,
+    account == null ? {} : { $a: account },
+  ).map(membershipFromRow);
+}
+
+/** 방에 들어간 것을 기록한다 (같은 계정·같은 방이면 덮어쓴다) */
+export function saveRoomMembership({ accountId: account, code, memberId, memberKey, name, memberName, start, end }) {
+  return write(() =>
+    db.run(
+      `INSERT INTO room_memberships (account_id, code, member_id, member_key, name, member_name, start_date, end_date, joined_at)
+       VALUES ($a, $code, $id, $key, $name, $mname, $s, $e, $now)
+       ON CONFLICT (account_id, code) DO UPDATE SET member_id = excluded.member_id, member_key = excluded.member_key,
+         name = excluded.name, member_name = excluded.member_name, start_date = excluded.start_date, end_date = excluded.end_date`,
+      {
+        $a: account,
+        $code: code,
+        $id: memberId,
+        $key: memberKey,
+        $name: name,
+        $mname: memberName,
+        $s: toISO(start),
+        $e: toISO(end),
+        $now: localTimestamp(),
+      },
+    ),
+  );
+}
+
+export function deleteRoomMembership(account, code) {
+  return write(() => db.run('DELETE FROM room_memberships WHERE account_id = $a AND code = $c', { $a: account, $c: code }));
+}
+
 // ── 백업 ───────────────────────────────────────────────────
 
 /** 백업 파일 바이트. 동기화 코드와 아직 보내지 않은 변경은 빼고 담는다(파일을 건네받은 사람이 동기화에 들어오지 못하게). */
@@ -1557,7 +1626,7 @@ function rekeyLocalIds() {
     for (const { id } of accounts) {
       const p = { $to: newId(), $from: id };
       db.run('UPDATE accounts SET id = $to WHERE id = $from', p);
-      for (const t of ['plans', 'saved_verses', 'day_notes', 'verse_notes']) {
+      for (const t of ['plans', 'saved_verses', 'day_notes', 'verse_notes', 'room_memberships']) {
         db.run(`UPDATE ${t} SET account_id = $to WHERE account_id = $from`, p);
       }
       db.run('UPDATE settings SET key = $to WHERE key = $from', { $to: yearVerseKey(p.$to), $from: yearVerseKey(id) });

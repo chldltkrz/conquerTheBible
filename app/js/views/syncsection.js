@@ -272,7 +272,8 @@ export function showShareDialog(code, { fresh = false } = {}) {
   renderQr(dlg.querySelector('.sync-qr'), link);
 }
 
-async function renderQr(el, text) {
+/** el 안에 text를 담은 QR 코드를 그린다 (함께 읽기 방의 초대 창도 쓴다) */
+export async function renderQr(el, text) {
   try {
     const { default: qrcode } = await import('../../vendor/qrcode.js');
     const qr = qrcode(0, 'M');

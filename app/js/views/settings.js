@@ -1,4 +1,4 @@
-// 설정 화면: 계정, 동기화, 읽기 알림, 읽기 화면, 오프라인 저장, 계획 기록, 백업
+// 설정 화면: 계정, 함께 읽기, 동기화, 읽기 알림, 읽기 화면, 오프라인 저장, 계획 기록, 백업
 
 import { TRANSLATIONS, allBooks, bookUrl } from '../bible.js';
 import { today, ymKey } from '../dates.js';
@@ -13,6 +13,7 @@ import {
   listPlans,
   renameAccount,
   resetAll,
+  roomMemberships,
   setSetting,
   syncInfo,
 } from '../db.js';
@@ -25,6 +26,8 @@ import { isDevHostname, isOptedOut, setOptOut, track } from '../analytics.js';
 import { handleSyncAction, syncSection } from './syncsection.js';
 import { handleReminderAction, handleReminderChange, reminderSection } from './remindersection.js';
 import { openExportSheet } from './exportsheet.js';
+import { handleRoomAction, openRoomSheet, roomSection } from './roomsection.js';
+import { leaveAccountRooms } from '../rooms.js';
 
 /**
  * 개발자에게 커피 보내기: 송금 링크를 넣으면 설정 화면에 그 버튼이 생긴다. 주소가 빈 항목은 보이지 않는다.
@@ -113,6 +116,8 @@ export async function settingsView(root, _params, { isCurrent }) {
           <p class="muted small">계정마다 읽기 계획, 읽음 기록, 저장한 구절이 따로 있습니다. 이름을 누르면 고칠 수 있습니다.</p>
           <button class="btn btn-ghost" data-action="switch-account">계정 추가</button>
         </section>
+
+        ${roomSection()}
 
         ${syncSection()}
 
@@ -332,7 +337,11 @@ export async function settingsView(root, _params, { isCurrent }) {
     const btn = e.target.closest('button');
     if (!btn) return;
     const d = btn.dataset;
-    if (d.syncAction) {
+    if (d.roomOpen) {
+      openRoomSheet(d.roomOpen, render);
+    } else if (d.roomAction) {
+      handleRoomAction(d.roomAction, render);
+    } else if (d.syncAction) {
       await handleSyncAction(d.syncAction, btn, render);
     } else if (d.reminderAction) {
       await handleReminderAction(d.reminderAction, btn);
@@ -369,6 +378,7 @@ export async function settingsView(root, _params, { isCurrent }) {
         danger: true,
       });
       if (!ok) return;
+      await leaveAccountRooms(null); // 들어간 함께 읽기 방에서 먼저 나온다 (안 되면 그냥 지운다)
       await resetAll();
       applyReadingSettings();
       track('data_reset');
@@ -395,15 +405,19 @@ export async function settingsView(root, _params, { isCurrent }) {
       toast('계획을 삭제했습니다');
       render();
     } else if (d.deleteAccount) {
+      const id = Number(d.deleteAccount);
       const ok = await confirmDialog({
         title: `${d.label} 계정을 삭제할까요?`,
-        message: '이 계정의 계획, 읽음 기록, 저장한 구절이 모두 지워집니다.',
+        message: `이 계정의 계획, 읽음 기록, 저장한 구절이 모두 지워집니다.${roomMemberships(id).length
+          ? ' 들어간 함께 읽기 방에서도 나옵니다.'
+          : ''}`,
         confirmText: '삭제',
         danger: true,
       });
       if (!ok) return;
       try {
-        await deleteAccount(Number(d.deleteAccount));
+        await leaveAccountRooms(id);
+        await deleteAccount(id);
         track('account_deleted');
         toast('계정을 삭제했습니다');
       } catch (err) {

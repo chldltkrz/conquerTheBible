@@ -14,16 +14,20 @@
 //   GET    /api/sync/health   서버와 DB 확인
 //   (공간을 쓰는 요청은 Authorization: Bearer <동기화 코드>)
 //   /api/push/…               읽기 알림 (push.mjs)
+//   /api/rooms…               함께 읽기 방 (rooms.mjs)
 //
 // 실행: DATABASE_URL=postgres://… PORT=5690 node server/sync-server.mjs
 // 읽기 알림을 보내려면 VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY도 준다 (README "읽기 알림")
 
 import http from 'node:http';
-import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import pg from 'pg';
+import { bearerCode, hashCode, newCode } from './code.mjs';
 import { HttpError, readJson, send } from './http.mjs';
 import { PUSH_SCHEMA, createPushApi, createReminders, webPushSender } from './push.mjs';
+import { ROOMS_SCHEMA, createRoomsApi } from './rooms.mjs';
+
+export { CODE_ALPHABET, newCode, normalizeCode } from './code.mjs';
 
 export const PROTOCOL = 1;
 
@@ -39,6 +43,7 @@ export const TABLES = new Set([
   'verse_notes',
   'settings',
   'reading_progress',
+  'room_memberships',
 ]);
 const TABLES_JSON = JSON.stringify([...TABLES]);
 
@@ -69,37 +74,7 @@ export const SCHEMA = `
   CREATE INDEX IF NOT EXISTS sync_rows_by_version ON sync_rows (space_id, version);
 `;
 
-// ── 동기화 코드 ────────────────────────────────────────────
-// 헷갈리는 글자(0·O, 1·I)를 뺀 32글자로 12자리 = 60비트. "ABCD-EFGH-JKLM"처럼 넷씩 끊어 보여 준다.
-
-export const CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
-const CODE_RE = new RegExp(`^[${CODE_ALPHABET}]{12}$`);
-
-export function newCode() {
-  let s = '';
-  for (let i = 0; i < 12; i++) s += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)];
-  return formatCode(s);
-}
-
-const formatCode = (s) => s.match(/.{4}/g).join('-');
-
-/** 사람이 넣은 코드를 "ABCD-EFGH-JKLM" 꼴로. 맞지 않으면 null (소문자, 띄어쓰기, 빠진 '-'는 괜찮다) */
-export function normalizeCode(input) {
-  const s = String(input ?? '')
-    .toUpperCase()
-    .replace(/[\s-]/g, '');
-  return CODE_RE.test(s) ? formatCode(s) : null;
-}
-
-const hashCode = (code) => crypto.createHash('sha256').update(code.replace(/-/g, '')).digest();
-
 // ── HTTP ───────────────────────────────────────────────────
-
-/** Authorization: Bearer <동기화 코드>. 없거나 맞지 않으면 null */
-function bearerCode(req) {
-  const m = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? '');
-  return (m && normalizeCode(m[1])) || null;
-}
 
 function codeFrom(req) {
   const code = bearerCode(req);
@@ -138,6 +113,8 @@ export async function spaceIdFor(pool, req) {
 
 /** push: createPushApi()가 만든 읽기 알림 요청 처리기. 없으면 /api/push/…는 503 */
 export function createHandler(pool, { push = null } = {}) {
+  const rooms = createRoomsApi(pool);
+
   async function createSpace() {
     for (let i = 0; i < 5; i++) {
       const code = newCode();
@@ -289,6 +266,9 @@ export function createHandler(pool, { push = null } = {}) {
         if (!push) throw new HttpError(503, 'push_off');
         const [status, body] = await push(route, req);
         send(res, status, body);
+      } else if (pathname === '/api/rooms' || pathname.startsWith('/api/rooms/')) {
+        const [status, body] = await rooms(req, pathname);
+        send(res, status, body);
       } else send(res, 404, { error: 'not_found' });
     } catch (err) {
       if (err instanceof HttpError) {
@@ -311,6 +291,7 @@ export async function startServer({ databaseUrl, port = 5690, host = '127.0.0.1'
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 10 });
   await pool.query(SCHEMA);
   await pool.query(PUSH_SCHEMA);
+  await pool.query(ROOMS_SCHEMA);
   const reminders = push && createReminders(pool, push.sender);
   const pushApi =
     push && createPushApi(pool, { ...push, spaceIdFor: (req) => spaceIdFor(pool, req), deliver: reminders.deliver });

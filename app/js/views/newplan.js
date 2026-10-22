@@ -30,7 +30,7 @@ import {
   today,
   ymKey,
 } from '../dates.js';
-import { listPlans, MAX_PLAN_DAYS, partKey, planTrackDays, plansOverlapping, savePlan } from '../db.js';
+import { currentAccount, listPlans, MAX_PLAN_DAYS, partKey, planTrackDays, plansOverlapping, roomMemberships, savePlan } from '../db.js';
 import { buildGroupPlan, buildParallelPlan, buildPlan } from '../planner.js';
 import { translationsFor } from '../prefs.js';
 import { confirmDialog, formatNumber, html, setHTML, toast } from '../ui.js';
@@ -310,7 +310,18 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
           ? html`<p class="notice">기간이 겹치는 계획이 있습니다:
               ${overlaps.map((p, i) => html`${i ? ', ' : ''}<b>${p.title}</b> (${periodLabel(p)})`)}.
               새로 저장하면 겹치는 계획은 지워지고, 같은 날짜에 같은 범위를 읽은 기록만 이어집니다.</p>`
-          : ''}`;
+          : ''}
+      ${roomNotice(start, end)}`;
+  };
+
+  /** 이 기간에 함께 읽기 방에서 읽고 있으면: 계획을 바꾸면 방 사람들과 분량이 달라진다 */
+  const roomNotice = (start, end) => {
+    const rooms = roomMemberships(currentAccount().id).filter(
+      (m) => compareDate(m.start, end) <= 0 && compareDate(start, m.end) <= 0,
+    );
+    if (!rooms.length) return '';
+    return html`<p class="notice">이 기간에는 ${rooms.map((m, i) => html`${i ? ', ' : ''}<b>${m.name}</b>`)} 방에서 함께 읽고 있습니다.
+      계획을 바꾸면 방 사람들과 다른 분량을 읽게 되고, 방에는 바꾼 계획으로 읽은 것이 올라갑니다.</p>`;
   };
 
   /** 같은 기간에 계획이 있어 불러왔을 때: 고쳐서 저장하면 읽음 기록이 어떻게 되는지 */

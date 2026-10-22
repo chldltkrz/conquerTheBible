@@ -16,7 +16,9 @@ import { player } from './tts.js';
 import { initAnalytics, track } from './analytics.js';
 import { initSync, syncNow, takeSyncLinkCode } from './sync.js';
 import { initReminder } from './reminder.js';
+import { initRooms, takeRoomLinkCode } from './rooms.js';
 import { openJoinDialog } from './views/syncsection.js';
+import { openRoomJoin } from './views/roomsection.js';
 
 const main = document.getElementById('main');
 
@@ -148,9 +150,18 @@ async function resume() {
   }
 }
 
+/** 동기화 링크·함께 읽기 초대 링크의 코드가 있으면 화면을 그린 뒤 그 창을 띄운다 */
+function openLinks(rendered, syncCode, roomCode) {
+  const done = () => route({ refresh: true });
+  if (syncCode != null) rendered.then(() => openJoinDialog(syncCode, done));
+  if (roomCode != null) rendered.then(() => openRoomJoin(roomCode, { via: 'link', done }));
+}
+
 async function boot() {
-  // 동기화 링크(#sync=코드)로 열었으면 코드를 꺼내고 주소에서 지운다. 사용 통계에 주소가 남기 전에 한다.
+  // 동기화 링크(#sync=코드)나 함께 읽기 초대 링크(#room=코드)로 열었으면 코드를 꺼내고 주소에서 지운다.
+  // 사용 통계에 주소가 남기 전에 한다.
   const linkCode = takeSyncLinkCode();
+  const roomCode = takeRoomLinkCode();
   initAnalytics();
   try {
     await Promise.all([openDatabase(), loadIndex()]);
@@ -169,7 +180,13 @@ async function boot() {
   }
   applyReadingSettings();
   document.body.classList.remove('booting');
-  window.addEventListener('hashchange', () => route());
+  // 앱이 열려 있을 때 링크를 열어 주소만 바뀌어도 동기화·초대 창을 띄운다
+  window.addEventListener('hashchange', () => {
+    // 코드를 먼저 꺼낸다 (route()는 모르는 주소를 #/로 바꾼다)
+    const sync = takeSyncLinkCode();
+    const room = sync == null ? takeRoomLinkCode() : null;
+    openLinks(route(), sync, room);
+  });
   window.addEventListener('account-changed', () => route());
   window.addEventListener('sync-applied', refreshView);
   window.addEventListener('sync-status', refreshIfStale);
@@ -181,12 +198,17 @@ async function boot() {
     toast('다른 기기에서 동기화를 꺼서 이 기기도 멈췄습니다. 기록은 그대로 있습니다');
     refreshView();
   });
+  window.addEventListener('room-gone', (e) => {
+    toast(`${e.detail.name} 방이 없어졌거나 방에서 내보내져 목록에서 뺐습니다`);
+    refreshView();
+  });
   track('app_opened', () => ({ launch: 'cold', ...openedProps() }));
   window.addEventListener('appinstalled', () => track('pwa_installed'));
   const firstRender = route();
   initSync();
   initReminder();
-  if (linkCode != null) firstRender.then(() => openJoinDialog(linkCode, () => route({ refresh: true })));
+  initRooms();
+  openLinks(firstRender, linkCode, roomCode);
 
   // 어느 화면에서든: 계정 칩을 누르면 계정 창, data-switch-to 버튼은 그 계정으로 바로 바꾼다.
   document.addEventListener('click', (e) => {

@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { buildDemo, NOW_ISO } from './lib/manual-demo.mjs';
-import { launchBrowser, openDemo, phonePage, settle, shoot, startAppServer, SYNC_CODE } from './lib/manual-env.mjs';
+import { launchBrowser, openDemo, phonePage, ROOM_CODE, settle, shoot, startAppServer, SYNC_CODE } from './lib/manual-env.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const WORK = path.join(ROOT, '.cache/manual');
@@ -56,6 +56,26 @@ async function switchAccount(page, name, hash) {
   await page.reload();
   await page.waitForSelector('body:not(.booting)');
   await settle(page);
+}
+
+/** 예시 함께 읽기 방(manual-env.mjs)에 '나'로 들어간 뒤 hash 화면을 다시 연다 */
+async function joinDemoRoom(page, hash = '#/') {
+  await page.evaluate(async (code) => {
+    const rooms = await import('/js/rooms.js');
+    await rooms.joinRoom(await rooms.lookupRoom(code), '정은혜');
+  }, ROOM_CODE);
+  await page.goto(page.url().replace(/#.*$/, hash));
+  await page.reload();
+  await page.waitForSelector('body:not(.booting)');
+  await settle(page);
+}
+
+/** 방 창을 연다 */
+async function openRoomSheet(page) {
+  await joinDemoRoom(page);
+  await click(page, '[data-room-open]');
+  await page.waitForSelector('.sheet .room-members');
+  await settle(page, 500);
 }
 
 async function setSetting(page, key, value) {
@@ -531,6 +551,67 @@ const SHOT_LIST = [
       await p.waitForSelector('dialog[open] .choice-list');
     },
     marks: [m('dialog[open] .choice', { nth: 0 }), m('dialog[open] .choice', { nth: 1 })],
+  },
+  // 13 함께 읽기 (manual-env.mjs의 가짜 방. 방을 만들면 '나'도 멤버가 되므로 들어가기 화면을 먼저 찍는다)
+  {
+    name: 'room-join',
+    demo: 'fresh',
+    prep: async (p) => {
+      // 초대 링크를 연 것처럼
+      await p.evaluate((code) => (location.hash = `room=${code}`), ROOM_CODE);
+      await p.waitForSelector('dialog[open] [data-step="join"]');
+      await settle(p);
+    },
+    marks: [m('dialog[open] .room-join-plan'), m('dialog[open] .field'), m('dialog[open] .notice'), m('dialog[open] .dialog-actions .btn-primary')],
+  },
+  {
+    name: 'room-new',
+    prep: async (p) => {
+      await click(p, '[data-action="room-create"]');
+      await p.fill('dialog[open] [name=name]', '사랑구역');
+    },
+    marks: [m('dialog[open] .field', { nth: 0 }), m('dialog[open] .field', { nth: 1 }), m('dialog[open] .dialog-actions .btn-primary')],
+  },
+  {
+    name: 'room-invite',
+    prep: async (p) => {
+      await click(p, '[data-action="room-create"]');
+      await p.fill('dialog[open] [name=name]', '사랑구역');
+      await click(p, 'dialog[open] .dialog-actions .btn-primary');
+      await p.waitForSelector('dialog[open] .sync-qr svg');
+      await settle(p, 500);
+    },
+    marks: [m('dialog[open] .sync-qr'), m('dialog[open] .sync-code'), m('dialog[open] .button-row')],
+  },
+  {
+    name: 'room-today',
+    prep: async (p) => {
+      await joinDemoRoom(p);
+      await scrollTo(p, '#room-area', 140);
+    },
+    marks: [m('.room-card-head'), m('.room-tally'), m('.room-chips')],
+  },
+  {
+    name: 'room-sheet',
+    prep: openRoomSheet,
+    marks: [m('.sheet-hero'), m('.room-legend'), m('.room-member.is-me'), m('.room-member:not(.is-me) .room-week')],
+  },
+  {
+    name: 'room-sheet-more',
+    prep: async (p) => {
+      await openRoomSheet(p);
+      await scrollTo(p, '[data-room-invite]', 420);
+    },
+    marks: [m('[data-room-invite]'), m('[data-room-leave]')],
+  },
+  {
+    name: 'room-settings',
+    hash: '#/settings',
+    prep: async (p) => {
+      await joinDemoRoom(p, '#/settings');
+      await scrollTo(p, '#room-block', 160);
+    },
+    marks: [m('.room-item'), m('[data-room-action="create"]'), m('[data-room-action="join"]')],
   },
 ];
 

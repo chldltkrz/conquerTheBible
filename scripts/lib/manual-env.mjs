@@ -2,6 +2,7 @@
 // scripts/manual.mjs가 쓴다.
 //
 // - 서버는 app/를 그대로 내보내고, /api/는 가짜로 답한다(운영 동기화 서버에 닿지 않도록). 예시 기록은 /__demo/<이름>.sqlite.
+//   함께 읽기 방은 예시 기록의 '나'와 같은 계획(사복음서 한 달)을 읽는 "사랑구역" 방 하나가 있는 것처럼 답한다.
 // - 브라우저의 시각은 예시 기록과 같은 2026-10-17로 고정한다(page.clock.setFixedTime). 시간대는 Asia/Seoul.
 // - 명조·고딕이 기기에 있는 Noto CJK 글꼴로 보이도록 fontconfig 별칭을 준다.
 
@@ -27,6 +28,49 @@ const TYPES = {
 };
 
 export const SYNC_CODE = 'MANA-READ-7K4P'; // 화면에 보일 예시 동기화 코드 (헷갈리는 0·O·1·I는 쓰지 않는다)
+export const ROOM_CODE = 'HAM2-KE7R-DKS9'; // 예시 함께 읽기 방의 초대 코드
+
+// ── 예시 함께 읽기 방 ──────────────────────────────────────
+// 계획은 예시 기록 '나'의 계획(manual-demo.mjs)과 같아서, '나'로 들어가면 그 계획을 그대로 쓴다.
+// 오늘(17일)은 김집사·박성도·최집사가 다 읽었고 이권사는 읽는 중이다. '나'는 아직 → "오늘 5명 중 3명 읽음".
+
+const GOSPELS = { mat: 28, mrk: 16, luk: 24, jhn: 21 };
+const allChapters = Object.fromEntries(Object.entries(GOSPELS).map(([b, n]) => [b, Array.from({ length: n }, (_, i) => i + 1)]));
+const ROOM_PLAN = {
+  title: '사복음서 한 달 통독',
+  start: '2026-10-01',
+  end: '2026-10-31',
+  mode: 'sequential',
+  splitChapters: true,
+  selection: allChapters,
+  tracks: [{ title: '사복음서 한 달 통독', selection: allChapters }],
+};
+
+/** 10월 날짜별 읽음: 16일까지는 missed 말고 다 읽음, 17일(오늘)은 today, 그 뒤는 0 */
+function octoberDays(today, missed = []) {
+  const days = {};
+  for (let d = 1; d <= 31; d++) days[`2026-10-${String(d).padStart(2, '0')}`] = d < 17 ? (missed.includes(d) ? 0 : 100) : d === 17 ? today : 0;
+  return days;
+}
+
+const member = (id, name, color, today, missed, progress, owner = false) => ({
+  id,
+  name,
+  color,
+  owner,
+  days: octoberDays(today, missed),
+  progress,
+  joinedAt: '2026-09-28T12:00:00.000Z',
+  updatedAt: '2026-10-16T22:00:00.000Z',
+});
+const ROOM_MEMBERS = [
+  member('KJS2345ABC', '김집사', '#3b64b0', 100, [], 55, true),
+  member('LKS3456DEF', '이권사', '#b0532a', 45, [12], 50),
+  member('PSD4567GHJ', '박성도', '#7a4fa3', 100, [5, 6], 48),
+  member('CJS5678KLM', '최집사', '#2f7f8f', 100, [14, 15], 48),
+];
+const ME = { id: 'NA23456789', key: 'MANUALMEMBERKEY23456789ABCD' };
+const room = { name: '사랑구역', joined: false }; // joined: '나'가 들어간 뒤 (방 소식에 '나'도 넣는다)
 
 function readBody(req) {
   return new Promise((resolve) => {
@@ -53,6 +97,20 @@ async function fakeApi(req, res) {
   }
   if (req.method === 'DELETE' && pathname === '/api/sync/space') return send(204);
   if (pathname.startsWith('/api/push/')) return send(503, { error: 'push_off' });
+  if (req.method === 'POST' && pathname === '/api/rooms') {
+    room.name = JSON.parse((await readBody(req)) || '{}').name ?? room.name;
+    room.joined = true;
+    return send(201, { code: ROOM_CODE, member: ME });
+  }
+  if (req.method === 'GET' && pathname === '/api/rooms/room') {
+    const me = { ...member(ME.id, '나', '#2f6a55', 0, [], 0), days: {}, progress: null };
+    return send(200, { name: room.name, plan: ROOM_PLAN, createdAt: '2026-09-28T12:00:00.000Z', members: [...ROOM_MEMBERS, ...(room.joined ? [me] : [])] });
+  }
+  if (req.method === 'POST' && pathname === '/api/rooms/members') {
+    room.joined = true;
+    return send(201, ME);
+  }
+  if (pathname.startsWith('/api/rooms')) return send(204);
   return send(404, { error: 'not_found' });
 }
 

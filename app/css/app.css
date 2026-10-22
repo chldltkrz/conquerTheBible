@@ -3939,6 +3939,351 @@ a.mc-cell:active {
   color: var(--danger);
 }
 
+/* ── 함께 읽기 방 ─────────────────────────────────────── */
+.room-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.room-icon svg {
+  width: 21px;
+  height: 21px;
+}
+
+.room-cards {
+  display: grid;
+  gap: 10px;
+}
+
+.room-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+}
+
+.room-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.room-card-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.room-card-title b,
+.room-card-title small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-card-title small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.room-tally {
+  display: block;
+  margin-top: 14px;
+  font-size: 17px;
+}
+
+.room-line {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink-2);
+  font-size: 14px;
+}
+
+.room-card > .room-line:nth-child(2) {
+  margin-top: 12px;
+}
+
+.room-bar {
+  display: block;
+  height: 6px;
+  margin-top: 8px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.room-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.room-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.room-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 10px 3px 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--ink-2);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.room-chip > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-chip.is-me {
+  border-color: var(--accent);
+}
+
+.room-chip.is-more {
+  padding-left: 10px;
+  color: var(--muted);
+}
+
+.room-mark {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.room-mark svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 3;
+}
+
+.room-chip.is-read .room-mark {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.room-chip.is-part .room-mark {
+  padding: 0 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.room-chip.is-todo .room-mark {
+  width: 20px;
+  border: 2px solid var(--line);
+}
+
+.room-chip.is-off {
+  color: var(--muted);
+}
+
+.room-chip.is-off .room-mark::before {
+  content: '–';
+}
+
+.room-create {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.room-create > span:nth-child(2) {
+  flex: 1;
+}
+
+/* 방 창 */
+.room-legend .rd {
+  width: 14px;
+  height: 14px;
+  margin-right: 5px;
+  vertical-align: -2px;
+}
+
+.room-legend li {
+  display: inline-flex;
+  align-items: center;
+}
+
+.room-members {
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+
+.room-member {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.room-member.is-me {
+  border-color: var(--accent);
+}
+
+.room-member .avatar {
+  grid-row: 1 / span 2;
+  width: 38px;
+  height: 38px;
+  font-size: 16px;
+}
+
+.room-member-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.room-member-name b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-member-name .tag {
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.tag.is-owner {
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+
+.room-member .icon-btn {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+}
+
+.room-member-sub {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.room-member .room-week {
+  grid-column: 2 / -1;
+  margin-top: 8px;
+}
+
+.room-week {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.rd {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.rd.is-read {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.rd.is-part {
+  border-color: var(--accent);
+  background: linear-gradient(to top, var(--accent-soft) var(--p), var(--bg) var(--p));
+  color: var(--accent);
+}
+
+.rd.is-off {
+  border-style: dashed;
+  opacity: 0.6;
+}
+
+.rd.is-today {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--ink-2);
+}
+
+.room-leave {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 24px;
+}
+
+/* 설정 화면의 방 목록 */
+.room-list {
+  list-style: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 0;
+}
+
+.room-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg);
+  text-align: left;
+}
+
+/* 만들기·들어가기 창 */
+.room-form .field {
+  margin: 16px 0 0;
+}
+
+.room-form .field input {
+  background: var(--bg);
+}
+
+.room-form .eyebrow {
+  margin: 0 0 2px;
+}
+
+.room-form .notice {
+  margin: 16px 0 0;
+  font-size: 14px;
+}
+
+.room-join-plan small {
+  color: var(--muted);
+}
+
 /* ── 말씀 공유 창 (말씀 카드) ─────────────────────────── */
 .card-preview {
   display: flex;
