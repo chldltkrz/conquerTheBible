@@ -20,6 +20,7 @@ import { initRooms, takeRoomLinkCode } from './rooms.js';
 import { initTheme } from './theme.js';
 import { openJoinDialog } from './views/syncsection.js';
 import { openRoomJoin } from './views/roomsection.js';
+import { leaveInAppBrowser, noticeInApp } from './inapp.js';
 
 const main = document.getElementById('main');
 
@@ -159,6 +160,8 @@ function openLinks(rendered, syncCode, roomCode) {
 }
 
 async function boot() {
+  // 카카오톡 등 앱 안의 브라우저에서 처음 열었으면 휴대폰 브라우저로 옮긴다 (주소의 동기화·초대 코드를 꺼내기 전에)
+  const inApp = await leaveInAppBrowser(main);
   // 동기화 링크(#sync=코드)나 함께 읽기 초대 링크(#room=코드)로 열었으면 코드를 꺼내고 주소에서 지운다.
   // 사용 통계에 주소가 남기 전에 한다.
   const linkCode = takeSyncLinkCode();
@@ -211,6 +214,7 @@ async function boot() {
   initReminder();
   initRooms();
   openLinks(firstRender, linkCode, roomCode);
+  if (inApp && linkCode == null && roomCode == null) firstRender.then(() => noticeInApp(inApp));
 
   // 어느 화면에서든: 계정 칩을 누르면 계정 창, data-switch-to 버튼은 그 계정으로 바로 바꾼다.
   document.addEventListener('click', (e) => {

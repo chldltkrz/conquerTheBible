@@ -8,7 +8,7 @@ import { today } from './dates.js';
 
 const POSTHOG_KEY = 'phc_sUgN9up8ToFEa9ThSWQ3LgHRw9Z7e3bAw6KJiGeVksqk'; // PostHog 프로젝트 API 키 (공개돼도 되는 키)
 const POSTHOG_HOST = 'https://us.i.posthog.com'; // EU 프로젝트면 https://eu.i.posthog.com
-export const APP_VERSION = '0.9.2'; // 배포할 때 올린다
+export const APP_VERSION = '0.9.3'; // 배포할 때 올린다
 const OPT_OUT_KEY = 'ctb-analytics-optout';
 const ONCE_KEY = 'ctb-analytics-once';
 const MAX_QUEUE = 200;

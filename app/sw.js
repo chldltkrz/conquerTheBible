@@ -5,7 +5,7 @@
 //   동기화 서버(api/) → 손대지 않는다 (늘 서버로)
 // 읽기 알림(js/reminder.js, server/push.mjs)이 보낸 푸시를 알림으로 띄우는 것도 여기서 한다.
 
-const SHELL_CACHE = 'shell-v11';
+const SHELL_CACHE = 'shell-v12';
 const DATA_CACHE = 'bible-data-v1'; // js/views/settings.js와 같은 이름
 const IMAGE_CACHE = 'card-images-v1'; // 배경 그림을 같은 이름으로 다시 만들면(scripts/backgrounds.mjs --redo) 올린다
 
@@ -47,6 +47,7 @@ const SHELL_FILES = [
   'js/verses.js',
   'js/tts.js',
   'js/analytics.js',
+  'js/inapp.js',
   'vendor/sql-wasm-browser.js',
   'vendor/sql-wasm-browser.wasm',
   'vendor/posthog.js',

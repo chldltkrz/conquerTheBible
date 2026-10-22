@@ -345,6 +345,15 @@ const readStored = () =>
     return () => ({ bytes: file.result, mark: mark.result ?? null });
   });
 
+/** 이 브라우저에 저장된 기록 파일이 있는지 (데이터베이스를 열기 전에 본다). 알 수 없으면 false */
+export async function hasStoredFile() {
+  try {
+    return (await readStored()).bytes != null;
+  } catch {
+    return false;
+  }
+}
+
 // ── 여러 창(탭) ────────────────────────────────────────────
 // 창마다 데이터베이스 사본을 메모리에 들고 바뀔 때마다 파일 전체를 IndexedDB에 덮어쓰므로, 두 창(설치한 앱과
 // 브라우저 탭 등)이 함께 쓰면 늦게 저장한 창이 다른 창의 기록을 지운다. 그래서 한 번에 한 창만 쓴다.
