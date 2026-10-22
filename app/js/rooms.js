@@ -10,7 +10,7 @@
 // 이 모듈은 Node 테스트에서도 import되므로 최상위에서 window/document를 직접 쓰지 않는다.
 
 import { book, getIndex, selectionToChapters } from './bible.js';
-import { addDays, compareDate, daysBetween, fromISO, toISO, today } from './dates.js';
+import { addDays, compareDate, daysBetween, formatDate, fromISO, toISO, today } from './dates.js';
 import {
   currentAccount,
   deleteRoomMembership,
@@ -72,8 +72,9 @@ const MESSAGES = {
 };
 
 export class RoomError extends Error {
-  constructor(code, status = 0) {
-    super(MESSAGES[code] ?? '서버에 문제가 생겼습니다. 잠시 뒤에 다시 해 주세요.');
+  /** message: MESSAGES에 없는 그때그때의 문구 (들어가지 못하는 까닭 등) */
+  constructor(code, status = 0, message = null) {
+    super(message ?? MESSAGES[code] ?? '서버에 문제가 생겼습니다. 잠시 뒤에 다시 해 주세요.');
     this.code = code;
     this.status = status;
   }
@@ -183,17 +184,36 @@ export function roomPlanTracks(plan) {
 const sameChapters = (a, b) => JSON.stringify(selectionToChapters(a)) === JSON.stringify(selectionToChapters(b));
 
 /**
- * 지금 계정에서 방의 계획과 겹치는 계획들. same: 기간·읽는 방식·묶음마다 읽는 장이 같은 계획
+ * 지금 계정에서 방의 계획과 겹치는 계획들. same: 기간·읽는 방식·장 중간에서도 나누는지·묶음마다 읽는 장이 같은 계획
  * (그 계획을 그대로 쓰면 된다. 밀린 분량을 다시 나눈 계획도 같은 계획으로 본다)
  */
 export function plansForRoom(plan) {
   const overlaps = plansOverlapping(plan.start, plan.end);
   const same = overlaps.find((p) => {
     if (compareDate(p.start, plan.start) || compareDate(p.end, plan.end) || p.mode !== plan.mode) return false;
+    if (p.splitChapters !== plan.splitChapters) return false; // 하루 분량이 방 사람들과 달라진다
     const tracks = planTrackDays(p.id);
     return tracks.length === plan.tracks.length && tracks.every((t, i) => sameChapters(chaptersOf(t.days), plan.tracks[i].selection));
   });
   return { same: same ?? null, overlaps };
+}
+
+/** 기간 [a.start, a.end]와 [b.start, b.end]가 하루라도 겹치는지 */
+export const periodsOverlap = (a, b) => compareDate(a.start, b.end) <= 0 && compareDate(b.start, a.end) <= 0;
+
+/**
+ * 지금 계정이 찾은 방(lookupRoom)에 들어갈 수 없는 까닭. 들어갈 수 있으면 null.
+ * 한 계정은 한 날짜에 계획이 하나뿐이라, 같은 기간에 여러 방에 들어가려면 방들의 계획이 같아야 한다.
+ */
+export function joinProblem(found, now = today()) {
+  if (found.members.length >= MAX_MEMBERS) return MESSAGES.room_full;
+  if (compareDate(found.plan.end, now) < 0) return `이 방의 계획은 ${formatDate(found.plan.end)}에 끝났습니다.`;
+  if (!plansForRoom(found.plan).same) {
+    // 들어가면 겹치는 계획이 방의 계획으로 바뀌어, 그 계획으로 함께 읽던 다른 방에 올라가는 읽음이 달라진다
+    const other = roomMemberships(currentAccount().id).find((x) => periodsOverlap(x, found.plan));
+    if (other) return `같은 기간에 ${other.name} 방에서 다른 계획을 읽고 있습니다. 그 방에서 나온 뒤 들어올 수 있습니다.`;
+  }
+  return null;
 }
 
 // ── 날짜별 읽음 ────────────────────────────────────────────
@@ -388,6 +408,8 @@ export async function lookupRoom(input) {
  * @returns {Promise<'same'|'saved'>} 있던 계획을 그대로 쓰는지, 방의 계획을 새로 저장했는지
  */
 export async function joinRoom(found, memberName) {
+  const problem = joinProblem(found);
+  if (problem) throw new RoomError('blocked', 0, problem);
   const acc = currentAccount();
   const plan = found.plan;
   const member = await request('POST', '/members', { code: found.code, body: { name: memberName, color: acc.color } });

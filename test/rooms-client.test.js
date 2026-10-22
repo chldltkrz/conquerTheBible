@@ -28,6 +28,7 @@ import {
   configureRooms,
   createRoom,
   deleteRoom,
+  joinProblem,
   joinRoom,
   leaveRoom,
   lookupRoom,
@@ -60,16 +61,17 @@ function device() {
 const START = addDays(today(), -2); // 그저께 시작한 열흘 계획 (오늘은 3일째)
 const END = addDays(START, 9);
 
-/** 누가복음 1–6장을 열흘에 나눈 계획 */
-async function lukePlan({ mode = 'sequential', title = '누가복음' } = {}) {
+/** 누가복음 1–6장을 열흘에 나눈 계획. split: 장 중간에서도 나누기 */
+async function lukePlan({ mode = 'sequential', title = '누가복음', split = true } = {}) {
   const sel = { luk: [1, 2, 3, 4, 5, 6] };
+  const opts = { splitChapters: split };
   const tracks =
     mode === 'sequential'
-      ? [{ title, days: buildPlan(getIndex(), selectionToChapters(sel), 10) }]
-      : buildGroupPlan(getIndex(), [selectionToChapters({ luk: [1, 2, 3] }), selectionToChapters({ luk: [4, 5, 6] })], 10).map(
+      ? [{ title, days: buildPlan(getIndex(), selectionToChapters(sel), 10, opts) }]
+      : buildGroupPlan(getIndex(), [selectionToChapters({ luk: [1, 2, 3] }), selectionToChapters({ luk: [4, 5, 6] })], 10, opts).map(
           (days, i) => ({ title: i ? '누가복음 4–6장' : '누가복음 1–3장', days }),
         );
-  return savePlan({ start: START, end: END, title, selection: sel, splitChapters: true, mode, tracks });
+  return savePlan({ start: START, end: END, title, selection: sel, splitChapters: split, mode, tracks });
 }
 
 const segmentsOf = (planId) => planTrackDays(planId).map((t) => t.days.map((d) => d.segments));
@@ -162,11 +164,11 @@ after(async () => {
 const t = (name, fn) => test(name, fn); // 서버가 없으면 테스트 안에서 건너뛴다 (before가 끝나야 알 수 있다)
 
 /** a가 계획을 만들고 방을 연다 → {a, code} */
-async function openRoom() {
+async function openRoom({ name = '사랑구역', split = true } = {}) {
   const a = device();
-  const id = await lukePlan();
+  const id = await lukePlan({ split });
   await setRead(id, 1, true);
-  const code = await createRoom(getPlan(id), { name: '사랑구역', memberName: '김집사' });
+  const code = await createRoom(getPlan(id), { name, memberName: '김집사' });
   return { a, code };
 }
 
@@ -315,4 +317,60 @@ t('아직 한 번도 올리지 않은 멤버는 방의 계획에 그날 분량�
   assert.deepEqual(roomTally(members), { reading: 2, read: 0 });
   const after = roomMembers(m, room, addDays(END, 1)).find((x) => x.name === '새 사람');
   assert.equal(after.pct, null, '계획 기간 밖의 날은 세지 않는다');
+});
+
+t('같은 계획을 읽는 두 방에 함께 들어가면 계획 하나를 같이 쓰고, 한 번 읽은 것이 두 방에 다 올라간다', async (ctx) => {
+  if (skip) return ctx.skip(skip);
+  const one = await openRoom({ name: '사랑구역' });
+  const two = await openRoom({ name: '우리 가족' });
+  const b = device();
+  assert.equal(await joinRoom(await lookupRoom(one.code), '엄마'), 'saved');
+  const found = await lookupRoom(two.code);
+  assert.equal(joinProblem(found), null);
+  assert.equal(await joinRoom(found, '엄마'), 'same');
+  assert.equal(listPlans().length, 1, '계획은 하나');
+  assert.deepEqual(roomMemberships().map((m) => m.name).sort(), ['사랑구역', '우리 가족']);
+
+  /** 그 방장의 기기에서 본 엄마의 오늘 읽음 */
+  const momToday = async (room) => {
+    room.a.use();
+    await refreshRooms();
+    const [m] = roomMemberships();
+    return roomMembers(m, roomData(room.code).room).find((x) => x.name === '엄마').pct;
+  };
+  b.use();
+  await setRead(planOn(today()).id, 3, true); // 오늘 분량을 한 번 읽는다
+  await uploadRooms();
+  assert.equal(await momToday(one), 100);
+  assert.equal(await momToday(two), 100);
+
+  // 한 방에서 나와도 계획과 다른 방은 그대로 이어진다
+  b.use();
+  await leaveRoom(roomMemberships().find((m) => m.code === one.code));
+  assert.deepEqual(roomMemberships().map((m) => m.code), [two.code]);
+  assert.equal(listPlans().length, 1);
+  await setRead(planOn(today()).id, 3, false);
+  await uploadRooms();
+  assert.equal(await momToday(two), 0, '남은 방에는 계속 올라간다');
+});
+
+t('장 중간에서도 나누기만 다른 계획은 같은 계획으로 보지 않아, 다른 방에서 읽는 기간이면 들어가지 못한다', async (ctx) => {
+  if (skip) return ctx.skip(skip);
+  const one = await openRoom({ name: '사랑구역' }); // 장 중간에서도 나눈다
+  const two = await openRoom({ name: '우리 가족', split: false }); // 장으로만 나눈다
+  device();
+  await joinRoom(await lookupRoom(one.code), '엄마');
+  const found = await lookupRoom(two.code);
+  assert.equal(plansForRoom(found.plan).same, null);
+  assert.match(joinProblem(found), /사랑구역 방에서 다른 계획/);
+  await assert.rejects(joinRoom(found, '엄마'), { code: 'blocked' });
+  assert.equal(roomMemberships().length, 1);
+  assert.equal((await lookupRoom(two.code)).members.length, 1, '서버에도 들어가지 않았다');
+  assert.equal(planOn(today()).splitChapters, true, '내 계획은 그대로');
+
+  // 같은 기간에 들어간 방이 없으면 들어갈 수 있고, 계획이 방의 나누기로 바뀐다
+  device();
+  await lukePlan();
+  assert.equal(await joinRoom(found, '이웃'), 'saved');
+  assert.equal(planOn(today()).splitChapters, false);
 });

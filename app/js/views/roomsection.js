@@ -7,11 +7,13 @@ import {
   createRoom,
   deleteRoom,
   isRoomActive,
+  joinProblem,
   joinRoom,
   leaveRoom,
   lookupRoom,
   MAX_MEMBERS,
   MEMBER_NAME_MAX,
+  periodsOverlap,
   plansForRoom,
   refreshRoom,
   refreshRooms,
@@ -31,9 +33,6 @@ import { renderQr } from './syncsection.js';
 export const roomIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2.5 20a6.5 6.5 0 0 1 13 0M16 4.3a3.5 3.5 0 0 1 0 6.4M18.5 14.2a6.5 6.5 0 0 1 3 5.8" /></svg>`;
 
 const CHIP_MAX = 12; // 오늘 화면에 이름으로 보여 줄 멤버 수 (넘으면 "외 N명")
-
-/** 기간 [a.start, a.end]와 [b.start, b.end]가 하루라도 겹치는지 */
-const overlaps = (a, b) => compareDate(a.start, b.end) <= 0 && compareDate(b.start, a.end) <= 0;
 
 /** 그날 읽음 → 'read' 다 읽음 | 'part' 읽는 중 | 'todo' 아직 | 'off' 그날 분량 없음 */
 function dayState(pct) {
@@ -126,7 +125,7 @@ export const roomArea = (now = today()) => html`<div id="room-area">${roomAreaIn
 
 /** 오늘 화면 아래쪽의 "함께 읽기 방 만들기" (그 계획의 기간에 들어간 방이 없을 때만) */
 export function roomCreateCard(plan) {
-  if (roomMemberships(plan.accountId).some((m) => overlaps(m, plan))) return '';
+  if (roomMemberships(plan.accountId).some((m) => periodsOverlap(m, plan))) return '';
   return html`<button class="card card-link room-create" data-action="room-create">
     <span class="room-icon">${roomIcon}</span>
     <span><b>함께 읽기 방 만들기</b><small>가족·구역 사람들과 이 계획을 같이 읽고, 오늘 누가 읽었는지 봅니다</small></span>
@@ -470,19 +469,6 @@ export function openRoomCreate(plan, done = () => {}) {
 }
 
 // ── 초대 코드로 들어가기 ───────────────────────────────────
-
-/** 찾은 방에 지금 계정이 들어갈 수 없는 까닭. 들어갈 수 있으면 null */
-function joinProblem(found, now) {
-  const mine = roomMemberships(currentAccount().id);
-  if (found.members.length >= MAX_MEMBERS) return `방이 가득 찼습니다. 한 방에는 ${MAX_MEMBERS}명까지 들어갈 수 있습니다.`;
-  if (compareDate(found.plan.end, now) < 0) return `이 방의 계획은 ${formatDate(found.plan.end)}에 끝났습니다.`;
-  if (!plansForRoom(found.plan).same) {
-    // 들어가면 겹치는 계획이 방의 계획으로 바뀌어, 그 계획으로 함께 읽던 다른 방의 읽음이 달라진다
-    const other = mine.find((x) => overlaps(x, found.plan));
-    if (other) return `같은 기간에 ${other.name} 방에서 다른 계획을 읽고 있습니다. 그 방에서 나온 뒤 들어올 수 있습니다.`;
-  }
-  return null;
-}
 
 /** 들어가면 계획이 어떻게 되는지 */
 function planNote(found) {
