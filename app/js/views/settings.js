@@ -1,4 +1,4 @@
-// 설정 화면: 계정, 함께 읽기, 동기화, 읽기 알림, 읽기 화면, 오프라인 저장, 계획 기록, 백업
+// 설정 화면: 계정, 함께 읽기, 동기화, 읽기 알림, 테마, 읽기 화면, 오프라인 저장, 계획 기록, 백업
 
 import { TRANSLATIONS, allBooks, bookUrl } from '../bible.js';
 import { today, ymKey } from '../dates.js';
@@ -28,6 +28,12 @@ import { handleReminderAction, handleReminderChange, reminderSection } from './r
 import { openExportSheet } from './exportsheet.js';
 import { handleRoomAction, openRoomSheet, roomSection } from './roomsection.js';
 import { leaveAccountRooms } from '../rooms.js';
+import { chosenTheme, currentTheme, setTheme } from '../theme.js';
+
+const THEMES = [
+  ['light', '라이트'],
+  ['dark', '다크'],
+];
 
 /**
  * 개발자에게 커피 보내기: 송금 링크를 넣으면 설정 화면에 그 버튼이 생긴다. 주소가 빈 항목은 보이지 않는다.
@@ -122,6 +128,23 @@ export async function settingsView(root, _params, { isCurrent }) {
         ${syncSection()}
 
         ${reminderSection()}
+
+        <section class="block" id="theme-block">
+          <h2 class="block-title">테마</h2>
+          <div class="card">
+            <div class="field-row">
+              <span>화면</span>
+              <div class="segmented" role="radiogroup" aria-label="테마">
+                ${THEMES.map(
+                  ([id, label]) => html`<button role="radio" data-theme-choice="${id}" aria-checked="${id === currentTheme()}">${label}</button>`,
+                )}
+              </div>
+            </div>
+            <p class="muted small">${chosenTheme()
+              ? '이 기기에서만 바뀝니다.'
+              : '고르기 전에는 휴대폰의 밝기 설정(다크 모드)을 따릅니다. 고르면 이 기기에서만 바뀝니다.'}</p>
+          </div>
+        </section>
 
         <section class="block">
           <h2 class="block-title">읽기 화면</h2>
@@ -345,6 +368,10 @@ export async function settingsView(root, _params, { isCurrent }) {
       await handleSyncAction(d.syncAction, btn, render);
     } else if (d.reminderAction) {
       await handleReminderAction(d.reminderAction, btn);
+    } else if (d.themeChoice) {
+      setTheme(d.themeChoice);
+      render();
+      track('reading_setting_changed', { setting: 'theme', value: d.themeChoice, surface: 'settings' });
     } else if (d.readingMode) {
       await setSetting('translation', d.readingMode);
       render();

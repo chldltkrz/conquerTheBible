@@ -449,6 +449,16 @@ const SHOT_LIST = [
   },
   // 11 설정
   {
+    name: 'settings-theme',
+    hash: '#/settings',
+    prep: async (p) => {
+      await scrollTo(p, '#theme-block', 220);
+      await click(p, '[data-theme-choice="dark"]');
+      await scrollTo(p, '#theme-block', 220);
+    },
+    marks: [m('#theme-block .segmented')],
+  },
+  {
     name: 'settings-reading',
     hash: '#/settings',
     prep: (p) => scrollTo(p, '#font-size', 160),

@@ -61,7 +61,18 @@
     </script>
 
     <meta name="theme-color" content="#f6f3ec" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#141619" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#191714" media="(prefers-color-scheme: dark)" />
+    <script>
+      // 테마(js/theme.js): 설정에서 고른 라이트·다크를, 고르지 않았으면 기기 설정을 첫 화면부터 쓴다
+      (function () {
+        var t = null;
+        try {
+          t = localStorage.getItem('ctb-theme');
+        } catch (e) {}
+        if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.dataset.theme = t;
+      })();
+    </script>
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="맛있는만나" />

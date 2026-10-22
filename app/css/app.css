@@ -1,4 +1,6 @@
 /* ── 토큰 ─────────────────────────────────────────────── */
+/* 테마(js/theme.js): 라이트는 :root, 다크는 [data-theme='dark']. 종이와 먹 색을 따른다 —
+   다크도 차가운 남색이 아니라 어두운 종이에 바랜 먹빛 글자, 녹색은 채도를 낮춘 잎색. 빛나는 색·그러데이션은 쓰지 않는다. */
 :root {
   color-scheme: light;
   --font-sans: 'Pretendard', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', system-ui, sans-serif;
@@ -31,28 +33,27 @@
   --safe-t: env(safe-area-inset-top, 0px);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --bg: #141619;
-    --surface: #1c1f23;
-    --surface-2: #262a2f;
-    --ink: #ebe8e2;
-    --ink-2: #c3c0ba;
-    --muted: #8e939a;
-    --line: #2f3439;
-    --accent: #7cc4a6;
-    --accent-ink: #0d1a14;
-    --accent-soft: #1d3a2e;
-    --warn: #e6a074;
-    --warn-soft: #3b2a1f;
-    --mark: #4a3e1a;
-    --sun: #ea877e;
-    --sat: #93b3ec;
-    --danger: #f08178;
-    --danger-ink: #2a0f0c;
-    --shadow: 0 1px 2px rgb(0 0 0 / 30%);
-  }
+/* 바꾸면 js/theme.js의 STATUS_BAR(상태 표시줄 색)도 --bg에 맞춘다 */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #191714;
+  --surface: #211f1b;
+  --surface-2: #2b2823;
+  --ink: #ebe5d9;
+  --ink-2: #c5bdaf;
+  --muted: #9c9386;
+  --line: #36322b;
+  --accent: #8db89c;
+  --accent-ink: #14201a;
+  --accent-soft: #24332b;
+  --warn: #d6a27c;
+  --warn-soft: #3a2b20;
+  --mark: #4d4023;
+  --sun: #e3907f;
+  --sat: #94abd8;
+  --danger: #e8897d;
+  --danger-ink: #2a0f0c;
+  --shadow: 0 1px 2px rgb(0 0 0 / 35%);
 }
 
 /* ── 기본 ─────────────────────────────────────────────── */
@@ -561,7 +562,7 @@ main:focus-visible {
   padding: 16px 48px 16px;
   border-radius: var(--radius);
   border: 1px solid var(--line);
-  background: linear-gradient(160deg, var(--accent-soft) 0%, var(--surface) 75%);
+  background: var(--accent-soft);
   text-align: center;
 }
 

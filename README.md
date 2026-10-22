@@ -33,6 +33,10 @@
   추천 구절이나 책·장·절로 본문을 불러오거나 교회 표어처럼 직접 적을 수 있습니다. 계정마다 따로 두고, 해가 바뀌면 다시 정합니다.
 - **오늘의 통독 / 오늘의 말씀**: 읽기 계획이 있으면 오늘 읽을 분량(오늘의 통독)을, 계획이 없거나 쉬는 날이면
   날마다 바뀌는 오늘의 말씀(`app/js/verses.js`의 160여 구절)을 보여 줍니다. 오늘의 말씀도 공유·저장할 수 있습니다.
+- **테마**: 설정 > 테마에서 **라이트**와 **다크** 중에서 고릅니다. 고르기 전에는 기기의 다크 모드 설정을 따르고(바뀌면 따라 바뀜),
+  고른 것은 기기마다 기억합니다. 데이터베이스가 열리기 전 첫 화면부터 그 색으로 그리도록 SQLite 대신 localStorage에 두고
+  `index.html`의 `<head>`에서 먼저 적용합니다(`app/js/theme.js`). 색은 `app.css` 맨 위의 토큰(`:root`, `:root[data-theme='dark']`)이고,
+  두 테마 모두 종이와 먹 색을 따라 빛나는 색이나 그러데이션을 쓰지 않습니다.
 - **개발자에게 커피 보내기**: `app/js/views/settings.js`의 `COFFEE_LINKS`에 토스·카카오페이 등 송금 링크를 넣으면
   설정 화면에 버튼이 생깁니다. 링크가 없으면 배포한 사이트에서는 이 칸을 숨깁니다.
 - **묵상 메모**: 본문 화면 아래에 그날의 묵상 메모를 남깁니다(입력하면 자동 저장). 저장한 구절에도 메모를
@@ -180,7 +184,7 @@ set -a; . /etc/conquer-the-bible/sync.env; set +a; npm test
 
 ```sh
 npx playwright install chromium      # 처음 한 번 (헤드리스 크롬)
-npm run manual                       # 화면 59장을 찍고 app/docs/user-manual.pdf를 만든다 (몇 분)
+npm run manual                       # 화면 60장을 찍고 app/docs/user-manual.pdf를 만든다 (몇 분)
 npm run manual -- --only card,export # 그 화면만 다시 찍고 PDF
 npm run manual -- --pdf              # 글만 고쳤으면 찍어 둔 화면으로 PDF만
 ```
@@ -322,6 +326,7 @@ app/                  배포할 정적 사이트 (PWA)
   js/db.js            SQLite 스키마와 질의, 동기화할 줄 모으기·받은 줄 넣기
   js/sync.js          기기 간 동기화: 서버와 주고받기, 언제 할지
   js/reminder.js      읽기 알림: 날마다 알릴 내용 계산, 푸시 구독
+  js/theme.js         테마 (라이트·다크) 고르기와 적용
   js/rooms.js         함께 읽기 방: 서버와 주고받기, 날짜별 읽음 계산 (화면은 views/roomsection.js)
   js/bible.js         본문 불러오기, 구절 표기
   js/card.js          말씀 카드 그리기 (줄 나누기·글자 크기 맞추기, 공유 창은 views/cardsheet.js)

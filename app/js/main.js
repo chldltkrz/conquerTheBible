@@ -17,6 +17,7 @@ import { initAnalytics, track } from './analytics.js';
 import { initSync, syncNow, takeSyncLinkCode } from './sync.js';
 import { initReminder } from './reminder.js';
 import { initRooms, takeRoomLinkCode } from './rooms.js';
+import { initTheme } from './theme.js';
 import { openJoinDialog } from './views/syncsection.js';
 import { openRoomJoin } from './views/roomsection.js';
 
@@ -162,6 +163,7 @@ async function boot() {
   // 사용 통계에 주소가 남기 전에 한다.
   const linkCode = takeSyncLinkCode();
   const roomCode = takeRoomLinkCode();
+  initTheme();
   initAnalytics();
   try {
     await Promise.all([openDatabase(), loadIndex()]);
