@@ -2061,10 +2061,14 @@ button.stat:active {
   margin: 0 0 10px;
 }
 
-/* ── 역본 (새번역 · BSB · 함께 보기) ─────────────────── */
+/* ── 역본 (새번역 · 개역개정 · BSB, 함께 보기) ─────────── */
+/* 좁은 화면에서는 함께 보기 고르기가 다음 줄로 내려간다 */
 .tr-switch {
   display: flex;
-  width: fit-content;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
   margin: 10px auto 0;
 }
 
@@ -2075,9 +2079,14 @@ button.stat:active {
   font-size: 14px;
 }
 
-/* 함께 보기: 새번역 절 아래에 BSB를 붙이고, 절 사이를 조금 더 띄운다 */
-.scripture .en,
-.sample .en {
+.tr-switch .companion-select {
+  max-width: none;
+  height: 44px;
+}
+
+/* 함께 보기: 본문 절 아래에 함께 볼 역본을 붙이고, 절 사이를 조금 더 띄운다 */
+.scripture .alt,
+.sample .alt {
   display: block;
   margin-top: 0.15em;
   font-family: var(--font-sans);
@@ -2086,7 +2095,7 @@ button.stat:active {
   color: var(--ink-2);
 }
 
-.poetry .verse .en {
+.poetry .verse .alt {
   text-indent: 0;
 }
 
@@ -2094,7 +2103,7 @@ button.stat:active {
   margin-bottom: 0.6em;
 }
 
-.sample .en {
+.sample .alt {
   margin-top: 6px;
 }
 

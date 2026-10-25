@@ -32,6 +32,7 @@ import {
 import { html, josa, setHTML, toast } from '../ui.js';
 import { openShareSheet } from './cardsheet.js';
 import { rebalanceTrack } from '../planner.js';
+import { READING_TRANSLATIONS, readingMode } from '../prefs.js';
 import { track, trackOnce } from '../analytics.js';
 
 /** 본문 화면 주소. track을 주면 그 책 부분으로 바로 내려간다. */
@@ -72,11 +73,30 @@ export const shareIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path 
 
 /**
  * 말씀 공유 창을 연다: 말씀 카드(이미지)로 공유·저장하거나 "말씀 - 책 장:절" 글로 복사한다.
- * translation이 'bsb'면 영어 책 이름과 BSB를 쓴다.
+ * translation이 새번역이 아니면 그 역본의 책 이름과 역본 이름을 쓴다.
  */
 export function shareVerses(verses, surface, translation = 'saenew') {
   openShareSheet(verses, { surface, translation });
 }
+
+// ── 역본 고르기 (본문 화면 위, 설정) ─────────────────────────
+
+/** 본문 역본 버튼들. 누르면 data-reading-main */
+export const translationButtons = (mode = readingMode()) =>
+  html`<div class="segmented" role="radiogroup" aria-label="역본">
+    ${READING_TRANSLATIONS.map(
+      (x) => html`<button role="radio" data-reading-main="${x.id}" aria-checked="${x.id === mode.main}" title="${x.detail}">${x.label}</button>`,
+    )}
+  </div>`;
+
+/** 절마다 아래에 함께 볼 역본 고르기 (본문 역본은 빼고). 바꾸면 data-reading-companion의 change */
+export const companionSelect = (mode = readingMode()) =>
+  html`<select class="select companion-select" data-reading-companion aria-label="절마다 아래에 함께 볼 역본">
+    <option value="">함께 보기 없음</option>
+    ${READING_TRANSLATIONS.filter((x) => x.id !== mode.main).map(
+      (x) => html`<option value="${x.id}" ${x.id === mode.companion ? 'selected' : ''}>＋ ${x.label} 함께</option>`,
+    )}
+  </select>`;
 
 // ── 계정 ───────────────────────────────────────────────────
 

@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node scripts/serve.mjs",
     "crawl": "node scripts/crawl.mjs",
+    "gae": "node scripts/crawl.mjs gae",
     "bsb": "node scripts/bsb.mjs",
     "test": "node --test --test-concurrency=1",
     "icons": "node scripts/make-icons.mjs",

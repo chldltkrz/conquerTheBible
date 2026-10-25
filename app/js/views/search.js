@@ -1,4 +1,4 @@
-// 말씀 검색 화면: 새번역이나 BSB 전체에서 낱말로 찾고, 결과에서 바로 저장·공유한다.
+// 말씀 검색 화면: 새번역·개역개정·BSB 전체에서 낱말로 찾고, 결과에서 바로 저장·공유한다.
 
 import { TRANSLATIONS, allBooks, book, loadBook } from '../bible.js';
 import { listSavedVerses, saveVerseToday, verseKey } from '../db.js';
@@ -90,10 +90,10 @@ const placeholder = () => (state.tr === 'bsb' ? '낱말로 찾기 (예: shepherd
 
 export async function searchView(root, _params, { isCurrent }) {
   const books = allBooks();
-  state.tr ??= readingMode() === 'bsb' ? 'bsb' : 'saenew';
+  state.tr ??= readingMode().main;
   setHTML(
     root,
-    html`${verseHead('search', '새번역·BSB 전체에서 찾기', '말씀 검색')}
+    html`${verseHead('search', '새번역·개역개정·BSB 전체에서 찾기', '말씀 검색')}
       <form class="search-box" role="search">
         <input type="search" name="q" value="${state.q}" placeholder="${placeholder()}"
           enterkeyhint="search" autocomplete="off" aria-label="찾을 낱말" />

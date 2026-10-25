@@ -54,7 +54,7 @@ export function exportSections({ notes = true, saved = true } = {}) {
   };
 }
 
-const COPYRIGHT = '성경 본문: 새번역 © 대한성서공회 · BSB(Berean Standard Bible)는 퍼블릭 도메인';
+const COPYRIGHT = '성경 본문: 새번역·개역개정 © 대한성서공회 · BSB(Berean Standard Bible)는 퍼블릭 도메인';
 
 const metaLine = (data, now) => `${data.account ? `${data.account} · ` : ''}${formatDate(now, { year: true })}에 내보냄`;
 

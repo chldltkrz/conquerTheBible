@@ -1,4 +1,4 @@
-// 본문 화면: 그날 분량의 본문(새번역·BSB·함께 보기), 마음에 남는 절 저장, 읽음 완료 버튼
+// 본문 화면: 그날 분량의 본문(새번역·개역개정·BSB, 함께 보기), 마음에 남는 절 저장, 읽음 완료 버튼
 
 import {
   TRANSLATIONS,
@@ -28,12 +28,13 @@ import {
   verseCounts,
   verseKey,
 } from '../db.js';
-import { FONT_SIZE, READING_MODES, applyReadingSettings, readingMode } from '../prefs.js';
+import { FONT_SIZE, applyReadingSettings, readingMode, setReadingMode } from '../prefs.js';
 import { html, raw, setHTML, toast } from '../ui.js';
 import {
   accountPrefix,
   bookmarkIcon,
   checkIcon,
+  companionSelect,
   entryOn,
   isParallel,
   partUnit,
@@ -44,6 +45,7 @@ import {
   shareIcon,
   shareVerses,
   trackReadChange,
+  translationButtons,
 } from './common.js';
 import { player } from '../tts.js';
 import { track, trackOnce } from '../analytics.js';
@@ -95,11 +97,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
         </div>
         <span class="read-bar" aria-hidden="true"><span></span></span>
       </header>
-      <div class="segmented tr-switch" role="radiogroup" aria-label="역본">
-        ${READING_MODES.map(
-          (x) => html`<button role="radio" data-mode="${x.id}" aria-checked="${x.id === readingMode()}" title="${x.detail}">${x.label}</button>`,
-        )}
-      </div>
+      <div class="tr-switch">${translationButtons()}${companionSelect()}</div>
       <div class="resume" id="resume" hidden></div>
       <article class="scripture" aria-busy="true">
         <p class="muted loading">본문을 불러오는 중…</p>
@@ -241,8 +239,8 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
   };
 
   root.onclick = async (e) => {
-    const mode = e.target.closest('[data-mode]')?.dataset.mode;
-    if (mode) return changeMode(mode);
+    const main = e.target.closest('[data-reading-main]')?.dataset.readingMain;
+    if (main) return changeMode({ main });
     const font = e.target.closest('[data-font]');
     if (font) {
       const size = getSetting('fontSize', FONT_SIZE.default) + Number(font.dataset.font);
@@ -265,7 +263,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
       return listening?.open(first);
     }
     if (action === 'save' || action === 'unsave') return saveSelection(action === 'save');
-    // 공유한 뒤에도 선택은 그대로 두어 이어서 저장할 수 있게 한다. (함께 보기면 새번역으로 공유한다)
+    // 공유한 뒤에도 선택은 그대로 두어 이어서 저장할 수 있게 한다. (함께 보기면 위에 보이는 본문 역본으로 공유한다)
     if (action === 'share') {
       const list = [...selected].map((k) => verses.get(k));
       return shareVerses(list, 'reader', list[0]?.tr);
@@ -319,6 +317,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
   };
   root.onchange = (e) => {
     if (e.target.id === 'day-memo') saveMemo(e.target.value);
+    if (e.target.matches('[data-reading-companion]')) changeMode({ companion: e.target.value || null });
   };
 
   root.onkeydown = (e) => {
@@ -512,11 +511,12 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     const mode = readingMode();
     const load = (tr) => Promise.all(codes.map((c) => loadBook(c, tr))).then((list) => new Map(list.map((b) => [b.code, b])));
     try {
-      const [ko, en] = await Promise.all([mode === 'bsb' ? null : load('saenew'), mode === 'saenew' ? null : load('bsb')]);
-      if (!isCurrent() || mode !== readingMode()) return;
+      const [main, sub] = await Promise.all([load(mode.main), mode.companion && load(mode.companion)]);
+      const now = readingMode();
+      if (!isCurrent() || now.main !== mode.main || now.companion !== mode.companion) return;
       verses.clear();
-      const chapters = (segments) => segments.map((s) => renderSegment(s, { ko: ko?.get(s.b), en: en?.get(s.b), mode }, verses));
-      article.classList.toggle('is-both', mode === 'both');
+      const chapters = (segments) => segments.map((s) => renderSegment(s, { main: main.get(s.b), sub: sub?.get(s.b), mode }, verses));
+      article.classList.toggle('is-both', !!mode.companion);
       setHTML(
         article,
         parallel
@@ -552,11 +552,14 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     }
   };
 
-  /** 역본 바꾸기: 기기에 기억해 두고 본문만 다시 그린다 (메모·읽음 표시는 그대로) */
-  const changeMode = async (mode) => {
-    if (mode === readingMode()) return;
-    root.querySelectorAll('.tr-switch [data-mode]').forEach((b) => b.setAttribute('aria-checked', b.dataset.mode === mode));
-    await setSetting('translation', mode);
+  /** 역본 바꾸기 ({main} 또는 {companion}): 기기에 기억해 두고 본문만 다시 그린다 (메모·읽음 표시는 그대로) */
+  const changeMode = async (change) => {
+    const before = readingMode();
+    await setReadingMode(change);
+    const mode = readingMode();
+    if (mode.main === before.main && mode.companion === before.companion) return;
+    // 본문 역본이 바뀌면 함께 볼 역본 목록도 달라진다
+    setHTML(root.querySelector('.tr-switch'), html`${translationButtons(mode)}${companionSelect(mode)}`);
     listening?.reset();
     selected.clear();
     renderBar();
@@ -569,11 +572,11 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
 
 /**
  * 한 구간의 본문. 각 절을 verses(키 → 절 정보)에도 담는다.
- * mode가 'bsb'면 BSB 본문을, 'both'면 새번역 절마다 아래에 BSB를 붙인다. 단락 제목·각주는 위에 보이는 역본 것을 쓴다.
+ * main은 mode.main 역본의 책, sub는 함께 볼 역본(mode.companion)의 책이다. sub가 있으면 절마다 아래에 붙인다.
+ * 단락 제목·각주는 위에 보이는 역본 것을 쓴다.
  */
-function renderSegment(seg, { ko, en, mode }, verses) {
-  const tr = mode === 'bsb' ? 'bsb' : 'saenew';
-  const main = tr === 'bsb' ? en : ko;
+function renderSegment(seg, { main, sub, mode }, verses) {
+  const tr = mode.main;
   const ch = main.chapters[seg.c - 1];
   const list = segmentVerses(seg, main);
   const whole = seg.from == null;
@@ -598,11 +601,12 @@ function renderSegment(seg, { ko, en, mode }, verses) {
         : `${name} ${seg.c}${unit} ${first}절부터`;
   // BSB 본문·제목에는 lang="en"을 달아 글꼴·줄 나눔·화면 읽기 프로그램이 영어로 다루게 한다.
   const lang = tr === 'bsb' ? raw(' lang="en"') : '';
+  const subLang = mode.companion && TRANSLATIONS[mode.companion].lang.slice(0, 2);
 
-  // 함께 보기: BSB 절을 그 번호가 든 새번역 절 아래에 붙인다. (새번역에 없는 번호는 바로 앞 절에)
+  // 함께 보기: 함께 볼 역본의 절을 그 번호가 든 본문 절 아래에 붙인다. (본문에 없는 번호는 바로 앞 절에)
   const below = new Map();
-  if (mode === 'both' && en) {
-    for (const x of segmentVerses(seg, en)) {
+  if (sub) {
+    for (const x of segmentVerses(seg, sub)) {
       const host =
         list.find((k) => x.v >= k.v && x.v <= (k.e ?? k.v)) ?? list.filter((k) => k.v <= x.v).at(-1) ?? list[0];
       if (!below.has(host)) below.set(host, []);
@@ -642,7 +646,7 @@ function renderSegment(seg, { ko, en, mode }, verses) {
     current.push(
       html`<span class="verse" data-ref="${key}" tabindex="0" role="button" aria-pressed="false"><sup class="vn">${v.e ? `${v.v}-${v.e}` : v.v}</sup>${v.t}<span class="vcount"></span>${
         extra
-          ? html`<span class="en" lang="en">${extra.map(
+          ? html`<span class="alt" lang="${subLang}">${extra.map(
               (x) => html`${extra.length > 1 || x.v !== v.v ? html`<sup class="vn">${x.v}</sup>` : ''}${x.t} `,
             )}</span>`
           : ''

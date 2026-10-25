@@ -769,7 +769,7 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
       is_first_plan: isFirstPlan,
       starts_in_days: daysBetween(now, start),
     }));
-    // 이번 계획에 필요한 책을 미리 받아 두면 오프라인에서도 읽을 수 있다. (BSB로 읽고 있으면 BSB도)
+    // 이번 계획에 필요한 책을 미리 받아 두면 오프라인에서도 읽을 수 있다. (읽는 역본과 함께 보는 역본 모두)
     Promise.all(translationsFor().flatMap((tr) => Object.keys(sel).map((code) => loadBook(code, tr)))).catch(() => {});
     const label = isWholeMonth(start, end) ? `${start.m}월` : formatPeriod(start, end);
     toast(

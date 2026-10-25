@@ -81,7 +81,7 @@ function backgroundStrip(index, firstTheme, current) {
 
 /**
  * 말씀 공유 창을 연다.
- * verses: [{b, c, v, e?, t}], surface: 사용 통계에 남길 화면 이름, translation: 'saenew' | 'bsb'
+ * verses: [{b, c, v, e?, t}], surface: 사용 통계에 남길 화면 이름, translation: 'saenew' | 'gae' | 'bsb'
  */
 export function openShareSheet(verses, { surface, translation = 'saenew' }) {
   const { text, ref } = shareParts(verses, { translation });

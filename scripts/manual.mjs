@@ -198,13 +198,17 @@ const SHOT_LIST = [
   {
     name: 'reader',
     hash: '#/read/2026-10/16',
-    marks: [m('.reader-title'), m('.listen-btn'), m('.font-ctl'), m('.tr-switch'), m('h3.section'), m('.verse .vn', { nth: 2, pad: 3 })],
+    marks: [m('.reader-title'), m('.listen-btn'), m('.font-ctl'), m('.tr-switch .segmented'), m('h3.section'), m('.verse .vn', { nth: 2, pad: 3 })],
   },
   {
     name: 'reader-both',
     hash: '#/read/2026-10/16',
-    prep: (p) => click(p, '.tr-switch button', '함께 보기'),
-    marks: [m('.tr-switch'), m('.verse .en', { nth: 1 })],
+    prep: async (p) => {
+      await click(p, '.tr-switch button', '개역개정');
+      await p.selectOption('.tr-switch .companion-select', 'saenew');
+      await settle(p, 450);
+    },
+    marks: [m('.tr-switch .segmented'), m('.tr-switch .companion-select'), m('.verse .alt', { nth: 1 })],
   },
   {
     name: 'reader-select',
@@ -462,7 +466,7 @@ const SHOT_LIST = [
     name: 'settings-reading',
     hash: '#/settings',
     prep: (p) => scrollTo(p, '#font-size', 160),
-    marks: [m('#font-size'), m('[data-family]', { box: true }), m('.segmented [data-reading-mode]'), m('#tts-voice'), m('[data-rate]'), m('[data-action="tts-test"]')],
+    marks: [m('#font-size'), m('[data-family]', { box: true }), m('.segmented:has([data-reading-main])'), m('[data-reading-companion]'), m('#tts-voice'), m('[data-rate]'), m('[data-action="tts-test"]')],
   },
   {
     name: 'settings-reminder',

@@ -1,11 +1,12 @@
-// 대한성서공회 사이트에서 새번역 본문을 받아 app/data/ 아래 JSON으로 만든다.
+// 대한성서공회 사이트에서 새번역(또는 개역개정) 본문을 받아 app/data/ 아래 JSON으로 만든다.
 //
-//   node scripts/crawl.mjs            받지 않은 장만 내려받고 JSON 생성
-//   node scripts/crawl.mjs --no-build 내려받기만
-//   node scripts/crawl.mjs --build    내려받지 않고 캐시된 HTML로 JSON만 다시 생성
+//   node scripts/crawl.mjs            새번역: 받지 않은 장만 내려받고 JSON 생성 (app/data/index.json, books/)
+//   node scripts/crawl.mjs gae        개역개정: 같은 방식으로 app/data/gae/books/ 생성
+//   --no-build                        내려받기만
+//   --build                           내려받지 않고 캐시된 HTML로 JSON만 다시 생성
 //
-// 내려받은 HTML은 .cache/saenew/ 에 남겨 두므로 다시 실행해도 사이트에 요청하지 않는다.
-// 새번역 본문의 저작권은 대한성서공회에 있다. 개인 용도로만 사용할 것.
+// 내려받은 HTML은 .cache/<역본>/ 에 남겨 두므로 다시 실행해도 사이트에 요청하지 않는다.
+// 새번역·개역개정 본문의 저작권은 대한성서공회에 있다.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -14,9 +15,17 @@ import { BOOKS } from './lib/books.mjs';
 import { parseChapter, verseWeight } from './lib/parse.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const CACHE_DIR = path.join(ROOT, '.cache', 'saenew');
-const OUT_DIR = path.join(ROOT, 'app', 'data');
-const BASE = 'https://www.bskorea.or.kr/bible/korbibReadpage.php?version=SAENEW';
+// 계획의 분량(index.json)은 새번역으로 만들고, 다른 역본은 책 본문만 만든다.
+const VERSIONS = {
+  saenew: { site: 'SAENEW', name: '새번역', out: path.join(ROOT, 'app', 'data') },
+  gae: { site: 'GAE', name: '개역개정', out: path.join(ROOT, 'app', 'data', 'gae') },
+};
+const args = process.argv.slice(2);
+const VERSION = args.find((a) => !a.startsWith('--')) ?? 'saenew';
+if (!VERSIONS[VERSION]) throw new Error(`알 수 없는 역본: ${VERSION} (${Object.keys(VERSIONS).join(', ')})`);
+const CACHE_DIR = path.join(ROOT, '.cache', VERSION);
+const OUT_DIR = VERSIONS[VERSION].out;
+const BASE = `https://www.bskorea.or.kr/bible/korbibReadpage.php?version=${VERSIONS[VERSION].site}`;
 
 const CONCURRENCY = 2;
 const DELAY_MS = 300;
@@ -132,6 +141,52 @@ async function build() {
   }
 }
 
-const args = new Set(process.argv.slice(2));
-if (!args.has('--build')) await download();
-if (!args.has('--no-build')) await build();
+/** 새번역이 아닌 역본: 책 본문만 만든다 (OUT_DIR/books/). 책 이름은 그 역본의 이름(개역개정 "마태복음")을 쓴다. */
+async function buildOther() {
+  const index = JSON.parse(await fs.readFile(path.join(VERSIONS.saenew.out, 'index.json'), 'utf8'));
+  await fs.mkdir(path.join(OUT_DIR, 'books'), { recursive: true });
+  const problems = [];
+  const differs = []; // 새번역과 절 번호가 다른 장 (계획은 새번역 절 번호를 따르므로 알아만 둔다)
+  let totalVerses = 0;
+
+  for (const b of BOOKS) {
+    const book = { code: b.code, name: b.name, chapters: [] };
+    const meta = index.books.find((x) => x.code === b.code).chapters;
+    for (let c = 1; c <= b.chapters; c++) {
+      const html = await fs.readFile(cachePath(b.code, c), 'utf8');
+      if (c === 1) {
+        const name = /<font style='display:none;' size=2>([^<]+)<\/font>/.exec(html)?.[1].trim();
+        if (name) book.name = name;
+        else problems.push(`${b.code}: 책 이름을 찾지 못함`);
+      }
+      const ch = parseChapter(html);
+      // 개역개정은 시편에 단락 제목이 없고, 표제를 단락 제목 자리(smallTitle)에 둔다.
+      if (b.code === 'psa') for (const h of ch.heads) h.kind = 'title';
+      if (ch.verses.length === 0) problems.push(`${b.code} ${c}: 절이 없음`);
+      let last = 0;
+      for (const v of ch.verses) {
+        if (v.v <= last) problems.push(`${b.code} ${c}: 절 번호 순서 이상 ${last} → ${v.v}`);
+        if (!v.t) problems.push(`${b.code} ${c}:${v.v} 본문이 비어 있음`);
+        last = v.e ?? v.v;
+      }
+      const ours = ch.verses.map((v) => (v.e ? `${v.v}-${v.e}` : `${v.v}`)).join(',');
+      const m = meta[c - 1];
+      const theirs = (m.v ?? m.w.map((_, i) => i + 1)).map((v) => (m.e?.[v] ? `${v}-${m.e[v]}` : `${v}`)).join(',');
+      if (ours !== theirs) differs.push(`${b.code} ${c}`);
+      totalVerses += ch.verses.length;
+      book.chapters.push({ c, ...ch });
+    }
+    await fs.writeFile(path.join(OUT_DIR, 'books', `${b.code}.json`), JSON.stringify(book));
+  }
+
+  console.log(`JSON 생성 완료: ${VERSIONS[VERSION].name} 66권, 절 ${totalVerses}개 → ${path.relative(ROOT, OUT_DIR)}/books`);
+  if (differs.length) console.log(`새번역과 절 번호가 다른 장 ${differs.length}개: ${differs.join(', ')}`);
+  if (problems.length) {
+    console.warn(`확인이 필요한 항목 ${problems.length}개:`);
+    for (const p of problems) console.warn('  ' + p);
+    process.exitCode = 1;
+  }
+}
+
+if (!args.includes('--build')) await download();
+if (!args.includes('--no-build')) await (VERSION === 'saenew' ? build() : buildOther());

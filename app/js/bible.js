@@ -1,4 +1,4 @@
-// 성경 데이터(새번역, BSB) 불러오기와 성경 구절 표기
+// 성경 데이터(새번역, 개역개정, BSB) 불러오기와 성경 구절 표기
 
 import { verseNumbers } from './planner.js';
 
@@ -28,14 +28,16 @@ export const book = (code) => byCode.get(code);
 
 /**
  * 역본. 계획의 분량과 절 번호는 새번역을 기준으로 하고, 다른 역본은 같은 장·절을 보여 준다.
+ * 개역개정은 새번역처럼 대한성서공회 사이트에서 받는다 (scripts/crawl.mjs gae).
  * BSB(Berean Standard Bible)는 퍼블릭 도메인이다 (scripts/bsb.mjs로 만든다).
  */
 export const TRANSLATIONS = {
   saenew: { id: 'saenew', name: '새번역', lang: 'ko-KR', dir: 'data/books' },
+  gae: { id: 'gae', name: '개역개정', lang: 'ko-KR', dir: 'data/gae/books' },
   bsb: { id: 'bsb', name: 'BSB', full: 'Berean Standard Bible', lang: 'en-US', dir: 'data/bsb/books' },
 };
 
-const englishNames = new Map(); // BSB 책 코드 → 영어 이름 (불러온 책만)
+const bookNames = new Map(); // "역본:책 코드" → 그 역본의 책 이름 (BSB "Psalm", 개역개정 "마태복음". 불러온 책만)
 
 /** 책 한 권의 본문. 서비스 워커가 캐시하므로 한 번 읽은 책은 오프라인에서도 열린다. */
 export function loadBook(code, translation = 'saenew') {
@@ -54,18 +56,17 @@ export function loadBook(code, translation = 'saenew') {
   return bookCache.get(key);
 }
 
-/** 불러온 책의 이름을 기억해 둔다 (공유할 때 BSB 영어 이름). 테스트에서는 파일을 직접 읽어 넘긴다. */
+/** 불러온 책의 이름을 기억해 둔다 (공유할 때 그 역본의 책 이름). 테스트에서는 파일을 직접 읽어 넘긴다. */
 export function rememberBook(data, translation = 'saenew') {
-  if (translation === 'bsb') englishNames.set(data.code, data.name);
+  if (translation !== 'saenew') bookNames.set(`${translation}:${data.code}`, data.name);
   return data;
 }
 
 /** 책 본문 파일 주소 (앱 기준 상대 경로) */
 export const bookUrl = (code, translation = 'saenew') => `${TRANSLATIONS[translation].dir}/${code}.json`;
 
-/** 역본에 맞는 책 이름. BSB면 영어 이름(불러온 책만, 아니면 새번역 이름) */
-export const bookName = (code, translation = 'saenew') =>
-  (translation === 'bsb' && englishNames.get(code)) || book(code).name;
+/** 역본에 맞는 책 이름. 다른 역본은 그 역본의 이름(불러온 책만, 아니면 새번역 이름) */
+export const bookName = (code, translation = 'saenew') => bookNames.get(`${translation}:${code}`) || book(code).name;
 
 /**
  * 구간 {b, c, from?, to?}(새번역 절 번호)에 드는 절들. 다른 역본은 절 번호가 조금 다른 장이 있어
@@ -243,9 +244,10 @@ function follows(p, x) {
  *   시 23:1           → "주님은 나의 목자시니, 내게 부족함 없어라. - 시편 23:1"
  *   마 5:3, 5:4, 5:9  → "… … … … - 마태복음서 5:3-4, 9"
  *   시 23:1, 요 3:16  → "… … … - 시편 23:1; 요한복음서 3:16"
- * BSB 본문이면 책 이름을 영어로 쓰고 끝에 " (BSB)"를 붙인다: "The LORD is my shepherd; … - Psalm 23:1 (BSB)"
+ * 다른 역본이면 그 역본의 책 이름을 쓰고 끝에 역본 이름을 붙인다:
+ *   "여호와는 나의 목자시니 … - 시편 23:1 (개역개정)", "The LORD is my shepherd; … - Psalm 23:1 (BSB)"
  * @param {Array<{b, c, v, e?, t}>} verses 순서는 상관없다 (성경 순서로 정렬한다)
- * @param {{translation?: 'saenew'|'bsb'}} [opts]
+ * @param {{translation?: 'saenew'|'gae'|'bsb'}} [opts]
  */
 export function shareText(verses, { translation = 'saenew' } = {}) {
   const { text, ref } = shareParts(verses, { translation });

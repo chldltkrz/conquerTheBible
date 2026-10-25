@@ -17,9 +17,9 @@ import {
   setSetting,
   syncInfo,
 } from '../db.js';
-import { FONT_SIZE, READING_MODES, applyReadingSettings, readingMode, translationsFor } from '../prefs.js';
+import { FONT_SIZE, applyReadingSettings, readingMode, setReadingMode, translationsFor } from '../prefs.js';
 import { confirmDialog, html, setHTML, toast } from '../ui.js';
-import { avatar, isMonthPlan, periodLabel } from './common.js';
+import { avatar, companionSelect, isMonthPlan, periodLabel, translationButtons } from './common.js';
 import { koreanVoices, pickVoice, player, RATES, voicesReady } from '../tts.js';
 import { rateLabel, speakerIcon } from './listen.js';
 import { isDevHostname, isOptedOut, setOptOut, track } from '../analytics.js';
@@ -57,19 +57,24 @@ const DATA_CACHE = 'bible-data-v1';
 // 설정 화면의 보기 예: 시편 23:1
 const SAMPLE = {
   saenew: '주님은 나의 목자시니, 내게 부족함 없어라.',
+  gae: '여호와는 나의 목자시니 내게 부족함이 없으리로다',
   bsb: 'The LORD is my shepherd; I shall not want.',
 };
+// 역본마다 66권 전체를 받을 때의 크기
+const FULL_SIZE = { saenew: '약 6MB', gae: '약 5MB', bsb: '약 5MB' };
+const langOf = (tr) => TRANSLATIONS[tr].lang.slice(0, 2);
 
 export async function settingsView(root, _params, { isCurrent }) {
   let downloading = false;
 
-  /** 역본마다 이 기기에 저장된 책 수 {saenew, bsb}. 지원하지 않는 브라우저면 null */
+  /** 역본마다 이 기기에 저장된 책 수 {saenew, gae, bsb}. 지원하지 않는 브라우저면 null */
   const cachedBookCounts = async () => {
     if (!('caches' in window)) return null;
     const cache = await caches.open(DATA_CACHE);
     const paths = (await cache.keys()).map((r) => new URL(r.url).pathname);
     return {
       saenew: paths.filter((p) => /\/data\/books\/[^/]+\.json$/.test(p)).length,
+      gae: paths.filter((p) => /\/data\/gae\/books\/[^/]+\.json$/.test(p)).length,
       bsb: paths.filter((p) => /\/data\/bsb\/books\/[^/]+\.json$/.test(p)).length,
     };
   };
@@ -162,19 +167,19 @@ export async function settingsView(root, _params, { isCurrent }) {
             </div>
             <div class="field-row">
               <span>역본</span>
-              <div class="segmented" role="radiogroup" aria-label="역본">
-                ${READING_MODES.map(
-                  (x) => html`<button role="radio" data-reading-mode="${x.id}" aria-checked="${x.id === mode}">${x.label}</button>`,
-                )}
-              </div>
+              ${translationButtons(mode)}
             </div>
-            <p class="sample ${mode === 'both' ? 'is-both' : ''}">
-              ${mode === 'bsb'
-                ? html`<span lang="en">${SAMPLE.bsb}</span>`
-                : html`${SAMPLE.saenew}${mode === 'both' ? html`<span class="en" lang="en">${SAMPLE.bsb}</span>` : ''}`}
+            <div class="field-row">
+              <span>함께 보기</span>
+              ${companionSelect(mode)}
+            </div>
+            <p class="sample">
+              <span lang="${langOf(mode.main)}">${SAMPLE[mode.main]}</span>${mode.companion
+                ? html`<span class="alt" lang="${langOf(mode.companion)}">${SAMPLE[mode.companion]}</span>`
+                : ''}
             </p>
-            <p class="muted small">BSB(Berean Standard Bible)는 현대 영어 번역입니다. 함께 보기는 새번역 절마다 아래에 BSB를 보여 줍니다.
-              본문 화면 위에서도 바꿀 수 있고, 계획의 분량과 절 번호는 새번역을 따릅니다.</p>
+            <p class="muted small">BSB(Berean Standard Bible)는 현대 영어 번역입니다. 함께 보기를 고르면 절마다 아래에 그 역본을 작게 보여 줍니다
+              (예: 개역개정 아래에 새번역). 본문 화면 위에서도 바꿀 수 있고, 계획의 분량과 절 번호는 새번역을 따릅니다.</p>
           </div>
         </section>
 
@@ -222,7 +227,7 @@ export async function settingsView(root, _params, { isCurrent }) {
                       (tr, i) => html`${i ? ', ' : ''}${TRANSLATIONS[tr].name} 66권 중 <b>${cached[tr]}</b>권`,
                     )}이 이 기기에 저장되어 있습니다.`}
             </p>
-            <p class="muted">계획을 만들면 그 계획에 필요한 책은 자동으로 저장됩니다. 전체를 받아 두면 인터넷 없이도 모든 본문을 읽을 수 있습니다(새번역 약 6MB${inUse.includes('bsb') ? ', BSB 약 5MB' : ''}).</p>
+            <p class="muted">계획을 만들면 그 계획에 필요한 책은 자동으로 저장됩니다. 전체를 받아 두면 인터넷 없이도 모든 본문을 읽을 수 있습니다(${inUse.map((tr) => `${TRANSLATIONS[tr].name} ${FULL_SIZE[tr]}`).join(', ')}).</p>
             ${missing
               ? html`<button class="btn btn-ghost" data-action="download">성경 전체 저장하기</button>
                   <div class="progress is-hidden" id="dl-progress"><span style="width:0"></span></div>`
@@ -304,7 +309,7 @@ export async function settingsView(root, _params, { isCurrent }) {
           : ''}
 
         <section class="block about">
-          <p>성경 본문: 새번역 © 대한성서공회. 개인 묵상과 읽기 용도로만 사용하세요.
+          <p>성경 본문: 새번역·개역개정 © 대한성서공회. 개인 묵상과 읽기 용도로만 사용하세요.
             BSB(Berean Standard Bible)는 퍼블릭 도메인입니다 (bereanbible.com).</p>
         </section>`,
     );
@@ -318,7 +323,7 @@ export async function settingsView(root, _params, { isCurrent }) {
     bar.classList.remove('is-hidden');
     const cache = await caches.open(DATA_CACHE);
     const books = allBooks();
-    // 읽는 역본만 받는다 (함께 보기면 새번역과 BSB 모두)
+    // 읽는 역본만 받는다 (함께 보기면 함께 보는 역본도)
     const files = translationsFor().flatMap((tr) => books.map((b) => new URL(bookUrl(b.code, tr), location.href).href));
     let done = 0;
     let failed = 0;
@@ -372,8 +377,8 @@ export async function settingsView(root, _params, { isCurrent }) {
       setTheme(d.themeChoice);
       render();
       track('reading_setting_changed', { setting: 'theme', value: d.themeChoice, surface: 'settings' });
-    } else if (d.readingMode) {
-      await setSetting('translation', d.readingMode);
+    } else if (d.readingMain) {
+      await setReadingMode({ main: d.readingMain });
       render();
     } else if (d.family) {
       await setSetting('fontFamily', d.family);
@@ -466,6 +471,11 @@ export async function settingsView(root, _params, { isCurrent }) {
     if (e.target.id === 'analytics-opt-in') {
       setOptOut(!e.target.checked);
       toast(e.target.checked ? '사용 통계를 보냅니다' : '사용 통계를 보내지 않습니다');
+      return;
+    }
+    if (e.target.matches('[data-reading-companion]')) {
+      await setReadingMode({ companion: e.target.value || null });
+      render();
       return;
     }
     if (e.target.id === 'tts-voice') {
