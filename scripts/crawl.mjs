@@ -12,7 +12,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BOOKS } from './lib/books.mjs';
-import { parseChapter, verseWeight } from './lib/parse.mjs';
+import { parseChapter, splitVerse, verseWeight } from './lib/parse.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // 계획의 분량(index.json)은 새번역으로 만들고, 다른 역본은 책 본문만 만든다.
@@ -31,6 +31,9 @@ const CONCURRENCY = 2;
 const DELAY_MS = 300;
 const START_MARK = 'id="tdBible1"';
 const END_MARK = '<div style="width:100%;text-align: center">';
+
+// 새번역 사이트 본문의 잘못 고치기: 다음 절 번호가 빠져 v절에 붙어 있는 v+1절을 at에서 나눈다.
+const SAENEW_SPLITS = [{ b: 'ezk', c: 15, v: 7, at: '그들이 크게 배신하였기 때문에' }]; // 에스겔서 15:8
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const cachePath = (code, chap) => path.join(CACHE_DIR, code, `${chap}.html`);
@@ -108,6 +111,9 @@ async function build() {
     for (let c = 1; c <= b.chapters; c++) {
       const html = await fs.readFile(cachePath(b.code, c), 'utf8');
       const ch = parseChapter(html);
+      for (const f of SAENEW_SPLITS.filter((f) => f.b === b.code && f.c === c)) {
+        if (!splitVerse(ch, f.v, f.at)) console.warn(`${b.code} ${c}:${f.v} 나누지 않음 (사이트가 고쳤는지 확인)`);
+      }
       const nums = ch.verses.map((v) => v.v);
       if (nums.length === 0) problems.push(`${b.code} ${c}: 절이 없음`);
       let last = 0;

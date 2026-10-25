@@ -61,3 +61,10 @@ test('카드 본문: 앞뒤 절로 이어지는 인용의 남는 따옴표는 �
     }
   }
 });
+
+test('새번역 에스겔서 15장은 8절까지 (사이트에 빠진 8절 번호를 crawl.mjs가 나눈다)', { skip }, () => {
+  assert.deepEqual(verseNumbers(book('ezk').chapters[14]), [1, 2, 3, 4, 5, 6, 7, 8]);
+  const [v7, v8] = bookFile('ezk').chapters[14].verses.slice(6);
+  assert.match(v7.t, /내가 주인 줄 알 것이다\.$/);
+  assert.match(v8.t, /^그들이 크게 배신하였기 때문에, .* 나 주 하나님의 말이다\."$/);
+});

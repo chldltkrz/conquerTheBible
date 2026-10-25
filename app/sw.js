@@ -5,9 +5,12 @@
 //   동기화 서버(api/) → 손대지 않는다 (늘 서버로)
 // 읽기 알림(js/reminder.js, server/push.mjs)이 보낸 푸시를 알림으로 띄우는 것도 여기서 한다.
 
-const SHELL_CACHE = 'shell-v13';
+const SHELL_CACHE = 'shell-v14';
 const DATA_CACHE = 'bible-data-v1'; // js/views/settings.js와 같은 이름
 const IMAGE_CACHE = 'card-images-v1'; // 배경 그림을 같은 이름으로 다시 만들면(scripts/backgrounds.mjs --redo) 올린다
+// 고친 성경 본문. 본문은 캐시 우선이라 이미 받아 둔 기기는 예전 파일을 계속 쓰므로, shell 번호가 before보다 작은
+// 버전에서 올라올 때 한 번 지운다 (다음에 열 때 새로 받는다).
+const FIXED_DATA = [{ before: 14, files: ['data/books/ezk.json'] }]; // 새번역 에스겔서 15:8
 
 const SHELL_FILES = [
   './',
@@ -69,10 +72,17 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches
-      .keys()
-      .then((keys) => Promise.all(keys.filter((k) => ![SHELL_CACHE, DATA_CACHE, IMAGE_CACHE].includes(k)).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim()),
+    (async () => {
+      const keys = await caches.keys();
+      const previous = keys.map((k) => Number(/^shell-v(\d+)$/.exec(k)?.[1])).filter((n) => n && `shell-v${n}` !== SHELL_CACHE);
+      const stale = FIXED_DATA.filter((f) => previous.some((n) => n < f.before)).flatMap((f) => f.files);
+      if (stale.length) {
+        const data = await caches.open(DATA_CACHE);
+        await Promise.all(stale.map((f) => data.delete(new URL(f, self.registration.scope).href)));
+      }
+      await Promise.all(keys.filter((k) => ![SHELL_CACHE, DATA_CACHE, IMAGE_CACHE].includes(k)).map((k) => caches.delete(k)));
+      await self.clients.claim();
+    })(),
   );
 });
 

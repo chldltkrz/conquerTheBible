@@ -118,6 +118,9 @@ DATABASE_URL=postgres://사용자:암호@127.0.0.1:5432/DB이름 node server/syn
 새번역 본문 데이터(`app/data/`)는 저장소에 들어 있습니다. 다시 만들려면 `npm run crawl`을 실행합니다(약 10분).
 내려받은 HTML은 `.cache/saenew/`에 남으므로, 다시 실행해도 사이트에 요청하지 않고 JSON만 다시 만듭니다.
 (`--build`: 캐시로 JSON만 생성, `--no-build`: 내려받기만)
+사이트 본문의 잘못은 만들 때 고칩니다(`scripts/crawl.mjs`의 `SAENEW_SPLITS`): 에스겔서 15장은 사이트에 8절 번호가 빠져
+8절이 7절에 붙어 있어 나눕니다. 그전에 만든 계획에서 15장 끝을 "7절까지"로 적은 구간은 데이터베이스 v9가 8절까지로 고치고,
+서비스 워커는 예전 `ezk.json`을 캐시해 둔 기기에서 한 번 지웁니다(`sw.js`의 `FIXED_DATA`).
 
 개역개정 본문(`app/data/gae/books/`)도 같은 사이트에서 받아 저장소에 넣어 두었습니다. 다시 만들려면 `npm run gae`
 (`node scripts/crawl.mjs gae`, 캐시는 `.cache/gae/`, 옵션은 같음). 책 이름은 개역개정 이름(마태복음, 여호수아)으로 두고,

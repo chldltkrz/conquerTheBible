@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseChapter, cleanText, verseWeight } from '../scripts/lib/parse.mjs';
+import { parseChapter, cleanText, splitVerse, verseWeight } from '../scripts/lib/parse.mjs';
 
 // bskorea.or.kr 장 페이지 구조를 흉내 낸 합성 HTML (실제 본문 아님)
 const note = (id, n) =>
@@ -56,4 +56,12 @@ test('각주를 본문에서 떼어 절 번호와 함께 모은다', () => {
 test('cleanText와 verseWeight', () => {
   assert.equal(cleanText('<font class="name">예수</font>께서&nbsp;말씀하셨다<br/>그리고'), '예수께서 말씀하셨다 그리고');
   assert.equal(verseWeight('가 나 다'), 3);
+});
+
+test('splitVerse: 번호가 빠져 붙은 다음 절을 나누고, 이미 있으면 그대로 둔다', () => {
+  const ch = { verses: [{ v: 6, t: '여섯째.' }, { v: 7, t: '일곱째 절이다. 여덟째 절이다.' }] };
+  assert.equal(splitVerse(ch, 7, '여덟째'), true);
+  assert.deepEqual(ch.verses, [{ v: 6, t: '여섯째.' }, { v: 7, t: '일곱째 절이다.' }, { v: 8, t: '여덟째 절이다.' }]);
+  assert.equal(splitVerse(ch, 7, '절이다.'), false, '8절이 이미 있음');
+  assert.equal(splitVerse({ verses: [{ v: 1, t: '가나다' }] }, 1, '없는 말'), false);
 });

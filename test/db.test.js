@@ -429,3 +429,33 @@ test('올해의 말씀은 계정마다 따로 두고, 계정을 지우면 함께
   await saveYearVerse(null);
   assert.equal(yearVerse(), null);
 });
+
+test('v9: 에스겔서 15장을 7절(예전 끝)까지 읽던 구간을 8절까지로 고치고, 동기화 중이면 보낼 줄로 적는다', async () => {
+  const db = new SQL.Database();
+  useMemoryDatabase(db);
+  const days = [
+    [{ b: 'ezk', c: 14 }, { b: 'ezk', c: 15, from: 1, to: 4 }], // 끝까지가 아니면 그대로
+    [{ b: 'ezk', c: 15, from: 5, to: 7 }, { b: 'ezk', c: 16, from: 1, to: 20 }],
+    [{ b: 'ezk', c: 15, from: 7, to: 7 }],
+    [{ b: 'ezk', c: 15, from: 1, to: 7 }],
+    [{ b: 'isa', c: 15, from: 5, to: 7 }], // 다른 책은 그대로
+  ];
+  const planId = await savePlan({
+    ...simple('에스겔서', nov(1), nov(5), 5),
+    tracks: [{ title: '에스겔서', days: days.map((segments) => ({ segments, chars: 10 })) }],
+  });
+  db.run("INSERT INTO sync_state (key, value) VALUES ('tracking', '1')");
+  db.exec('PRAGMA user_version = 8');
+  assert.equal(migrate(db), true);
+
+  const segs = rows(db, `SELECT segments FROM plan_days WHERE plan_id = ${planId} ORDER BY day`).map(([s]) => JSON.parse(s));
+  assert.deepEqual(segs, [
+    days[0],
+    [{ b: 'ezk', c: 15, from: 5, to: 8 }, { b: 'ezk', c: 16, from: 1, to: 20 }],
+    [{ b: 'ezk', c: 15, from: 7, to: 8 }],
+    [{ b: 'ezk', c: 15 }],
+    days[4],
+  ]);
+  const sent = rows(db, "SELECT DISTINCT key FROM sync_outbox WHERE tbl = 'plan_days'").map(([k]) => JSON.parse(k).at(-1));
+  assert.deepEqual(sent.sort(), [2, 3, 4]);
+});

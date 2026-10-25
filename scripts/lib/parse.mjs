@@ -91,3 +91,16 @@ export function parseChapter(html) {
 
   return { verses, heads, notes };
 }
+
+/**
+ * 사이트 본문에서 다음 절 번호가 빠져 두 절이 한 절에 붙어 있는 곳을 나눈다: v절 본문을 at이 시작하는 곳에서
+ * 잘라 뒷부분을 v+1절로 둔다. 이미 v+1절이 있거나(사이트가 고쳤으면) at을 찾지 못하면 그대로 두고 false.
+ */
+export function splitVerse(chapter, v, at) {
+  const i = chapter.verses.findIndex((x) => x.v === v && x.e == null);
+  const verse = chapter.verses[i];
+  const cut = verse?.t.indexOf(at) ?? -1;
+  if (cut <= 0 || chapter.verses.some((x) => x.v === v + 1)) return false;
+  chapter.verses.splice(i, 1, { v, t: verse.t.slice(0, cut).trim() }, { v: v + 1, t: verse.t.slice(cut).trim() });
+  return true;
+}

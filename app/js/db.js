@@ -292,7 +292,25 @@ export const MIGRATIONS = [
   );
   ${syncTriggers(8)}
   `,
+  // v9: 새번역 에스겔서 15:8을 바로잡았다(사이트에 8절 번호가 빠져 7절에 붙어 있었다). 그전에 만든 계획은
+  //     15장 끝까지 읽는 구간을 "7절까지"로 적었으므로 8절까지로 고친다. 동기화 중이면 트리거가 다른 기기에도 보낸다.
+  extendChapterEnd('ezk', 15, 7),
 ];
+
+/**
+ * 장 끝 절 번호가 oldEnd에서 oldEnd+1로 늘어난 장(1절부터 시작하는 장): 저장된 분량에서 그 장을 oldEnd절까지 읽던
+ * 구간을 새 끝까지로 고친다. 1절부터였으면 장 전체가 된다. 구간은 planner가 만든 그대로 {"b","c","from","to"} 순서다.
+ */
+function extendChapterEnd(b, c, oldEnd) {
+  const seg = (from, to) => JSON.stringify(from == null ? { b, c } : { b, c, from, to });
+  return Array.from({ length: oldEnd }, (_, i) => i + 1)
+    .map((from) => {
+      const old = seg(from, oldEnd);
+      const fixed = from === 1 ? seg() : seg(from, oldEnd + 1);
+      return `UPDATE plan_days SET segments = replace(segments, '${old}', '${fixed}') WHERE instr(segments, '${old}');`;
+    })
+    .join('\n');
+}
 
 /** 한 계획의 최대 기간 (1년 1독 계획까지) */
 export const MAX_PLAN_DAYS = 366;
