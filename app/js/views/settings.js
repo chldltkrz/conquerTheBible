@@ -279,7 +279,7 @@ export async function settingsView(root, _params, { isCurrent }) {
               </label>
             </div>
             <div class="button-row">
-              <button class="btn btn-ghost" data-action="export-notes">메모·구절을 글로 내보내기 (텍스트·PDF)</button>
+              <button class="btn btn-ghost" data-action="export-notes">메모·구절을 글로 내보내기 (텍스트&#8288;·&#8288;PDF)</button>
             </div>
             <button class="link danger" data-action="reset">모든 기록 지우기</button>
           </div>
