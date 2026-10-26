@@ -72,11 +72,21 @@ function parseColor(value) {
   return value.toLowerCase();
 }
 
+/** 값 안의 모든 문자열(열쇠 포함)에서 jsonb에 넣을 수 없는 글자(\u0000)를 뺀다 */
+function withoutNul(value) {
+  if (typeof value === 'string') return value.replace(/\u0000/g, '');
+  if (Array.isArray(value)) return value.map(withoutNul);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [withoutNul(k), withoutNul(v)]));
+  }
+  return value;
+}
+
 function parsePlan(plan) {
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw new HttpError(400, 'bad_plan');
-  const text = JSON.stringify(plan);
+  const text = JSON.stringify(withoutNul(plan));
   if (text.length > MAX_PLAN) throw new HttpError(413, 'plan_too_large');
-  return text.replace(/\\u0000/g, ''); // jsonb에 넣을 수 없는 글자
+  return text;
 }
 
 function parseDays(days) {
@@ -138,8 +148,11 @@ const memberJson = (r) => ({
   updatedAt: r.updated_at.toISOString(),
 });
 
-/** /api/rooms… 요청 처리기 → (req, pathname) => [status, body] */
-export function createRoomsApi(pool) {
+/**
+ * /api/rooms… 요청 처리기 → (req, pathname) => [status, body]
+ * ensureStorage(): 데이터베이스가 한도를 넘었으면 던진다 (방 만들기·들어가기 전에 부른다)
+ */
+export function createRoomsApi(pool, { ensureStorage = async () => {} } = {}) {
   /** 트랜잭션 안에서 fn(client)을 부른다 */
   async function transaction(fn) {
     const client = await pool.connect();
@@ -198,6 +211,7 @@ export function createRoomsApi(pool) {
     const name = parseName(body.name, ROOM_NAME);
     const plan = parsePlan(body.plan);
     const first = parseMember(body.member);
+    await ensureStorage();
     await pool.query(`DELETE FROM reading_rooms WHERE seen_at < now() - interval '${STALE}'`);
     return transaction(async (client) => {
       for (let i = 0; i < 5; i++) {
@@ -223,6 +237,7 @@ export function createRoomsApi(pool) {
 
   async function join(req) {
     const member = parseMember(await readJson(req, MAX_BODY));
+    await ensureStorage();
     return transaction(async (client) => {
       const roomId = await roomOf(client, req, { forUpdate: true });
       const n = (await client.query('SELECT count(*)::int AS n FROM room_members WHERE room_id = $1', [roomId])).rows[0].n;

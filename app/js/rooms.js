@@ -83,6 +83,7 @@ const MESSAGES = {
   bad_plan: '이 방의 계획을 읽지 못했습니다. 앱을 새로 고친 뒤 다시 해 주세요.',
   offline: '인터넷에 연결되어 있지 않습니다.',
   busy: '요청이 너무 많습니다. 잠시 뒤에 다시 해 주세요.',
+  server_full: '서버의 저장 공간이 부족해 지금은 방을 만들거나 들어갈 수 없습니다.',
 };
 
 export class RoomError extends Error {

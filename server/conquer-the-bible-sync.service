@@ -10,6 +10,7 @@ Wants=postgresql.service
 [Service]
 Type=simple
 # DATABASE_URL, 읽기 알림의 VAPID_PUBLIC_KEY·VAPID_PRIVATE_KEY (root만 읽을 수 있는 파일, systemd가 읽어 넘긴다)
+# 데이터베이스 크기 한도를 바꾸려면 SYNC_MAX_DB_BYTES도 (기본 5GB, README "기기 간 동기화")
 EnvironmentFile=/etc/conquer-the-bible/sync.env
 Environment=NODE_ENV=production
 Environment=HOST=127.0.0.1

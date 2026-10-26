@@ -67,6 +67,8 @@ const MESSAGES = {
   busy: '요청이 너무 많습니다. 잠시 뒤에 다시 해 주세요.',
   space_full: '동기화할 기록이 너무 많습니다.',
   too_large: '한 번에 보낼 수 있는 기록보다 큽니다.',
+  row_too_large: '한 번에 보낼 수 있는 기록보다 큽니다.',
+  server_full: '동기화 서버의 저장 공간이 부족합니다. 기록은 이 기기에 그대로 있습니다.',
 };
 
 export class SyncError extends Error {

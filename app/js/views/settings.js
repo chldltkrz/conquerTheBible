@@ -79,6 +79,30 @@ export async function settingsView(root, _params, { isCurrent }) {
     };
   };
 
+  // 목소리 목록은 늦게 채워지는 브라우저가 있어(크롬, 목소리가 없는 기기는 1.5초를 기다린다) 화면을 먼저 그리고,
+  // 목록을 받으면 목소리 칸과 안내만 채운다 (그사이 다른 칸에 쓰던 것을 지우지 않도록 화면 전체는 다시 그리지 않는다).
+  let voicesWaited = !player || koreanVoices().length > 0;
+  const voiceOptions = (voices, voiceURI) => html`<option value="">자동 (기기 안의 한국어 음성)</option>
+    ${voices.map(
+      (v) => html`<option value="${v.voiceURI}" ${v.voiceURI === voiceURI ? 'selected' : ''}>
+        ${v.name}${v.localService ? '' : ' · 인터넷 필요'}</option>`,
+    )}`;
+  const voiceNote = (voices) =>
+    voices.length
+      ? '브라우저에 들어 있는 음성으로 읽어 줍니다. "인터넷 필요"로 표시된 음성은 브라우저가 인터넷으로 소리를 만듭니다.'
+      : voicesWaited
+        ? '이 기기에서 한국어 음성을 찾지 못했습니다. 기기 설정에서 한국어 음성(TTS)을 설치하면 자연스럽게 읽습니다.'
+        : '목소리 목록을 불러오는 중입니다…';
+  const fillVoices = async () => {
+    await voicesReady();
+    voicesWaited = true;
+    const select = root.querySelector('#tts-voice');
+    if (!isCurrent() || !select) return;
+    const voices = koreanVoices();
+    setHTML(select, voiceOptions(voices, getSetting('ttsVoice')));
+    setHTML(root.querySelector('.tts-note'), voiceNote(voices));
+  };
+
   const render = async () => {
     const plans = listPlans();
     const thisYear = today().y;
@@ -90,10 +114,10 @@ export async function settingsView(root, _params, { isCurrent }) {
     const inUse = translationsFor(mode); // 오프라인 저장은 읽는 역본만
     const cached = await cachedBookCounts();
     const missing = cached && inUse.some((tr) => cached[tr] < 66);
-    const voices = player ? (await voicesReady(), koreanVoices()) : [];
+    const voices = player ? koreanVoices() : [];
     const voiceURI = getSetting('ttsVoice');
     const rate = getSetting('ttsRate', 1);
-    // 기다리는 동안(목소리 목록은 최대 1.5초, 성경 전체 저장은 몇 초) 다른 화면으로 옮겼으면 그 화면을 덮어쓰지 않는다.
+    // 기다리는 동안(성경 전체 저장은 몇 초) 다른 화면으로 옮겼으면 그 화면을 덮어쓰지 않는다.
     if (!isCurrent()) return;
 
     setHTML(
@@ -198,13 +222,7 @@ export async function settingsView(root, _params, { isCurrent }) {
               <div class="card">
                 <label class="field-row">
                   <span>목소리</span>
-                  <select id="tts-voice" class="select">
-                    <option value="">자동 (기기 안의 한국어 음성)</option>
-                    ${voices.map(
-                      (v) => html`<option value="${v.voiceURI}" ${v.voiceURI === voiceURI ? 'selected' : ''}>
-                        ${v.name}${v.localService ? '' : ' · 인터넷 필요'}</option>`,
-                    )}
-                  </select>
+                  <select id="tts-voice" class="select">${voiceOptions(voices, voiceURI)}</select>
                 </label>
                 <div class="field-row">
                   <span>속도</span>
@@ -215,11 +233,7 @@ export async function settingsView(root, _params, { isCurrent }) {
                   </div>
                 </div>
                 <button class="btn btn-ghost btn-sm" data-action="tts-test">${speakerIcon}<span>들어 보기</span></button>
-                <p class="muted small tts-note">
-                  ${voices.length
-                    ? '브라우저에 들어 있는 음성으로 읽어 줍니다. "인터넷 필요"로 표시된 음성은 브라우저가 인터넷으로 소리를 만듭니다.'
-                    : '이 기기에서 한국어 음성을 찾지 못했습니다. 기기 설정에서 한국어 음성(TTS)을 설치하면 자연스럽게 읽습니다.'}
-                </p>
+                <p class="muted small tts-note">${voiceNote(voices)}</p>
               </div>
             </section>`
           : ''}
@@ -541,4 +555,5 @@ export async function settingsView(root, _params, { isCurrent }) {
   };
 
   await render();
+  if (!voicesWaited) fillVoices();
 }

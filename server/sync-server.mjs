@@ -18,6 +18,9 @@
 //
 // 실행: DATABASE_URL=postgres://… PORT=5690 node server/sync-server.mjs
 // 읽기 알림을 보내려면 VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY도 준다 (README "읽기 알림")
+//
+// 저장 공간: 공간은 누구나 만들 수 있으므로 디스크를 채우지 못하게 줄 하나(MAX_ROW), 공간 하나(줄 수·크기),
+// 데이터베이스 전체(SYNC_MAX_DB_BYTES, 기본 5GB)에 한도를 두고, 400일 동안 아무 기기도 오지 않은 공간은 지운다.
 
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
@@ -49,8 +52,14 @@ const TABLES_JSON = JSON.stringify([...TABLES]);
 
 const MAX_CHANGES = 10000; // 요청 하나에 보내는 줄 수
 const MAX_KEY = 200;
-const MAX_ROW = 256 * 1024; // 줄 하나의 JSON 길이 (긴 묵상 메모도 들어가도록)
+// 줄 하나의 JSON 길이. 가장 긴 줄은 성경 전체를 하루에 읽는 계획의 그날 분량(약 3만 자)이다.
+const MAX_ROW = 64 * 1024;
 const MAX_SPACE_ROWS = 500000; // 공간 하나에 둘 수 있는 줄 수 (지운 줄 포함)
+// 공간 하나의 기록 크기(바이트). 1년 동안 66권을 동시에 읽는 계획이 몇 MB라서 여러 계정·여러 해를 넉넉히 담는다.
+export const MAX_SPACE_BYTES = 50 * 1024 * 1024;
+// 데이터베이스 전체 크기 한도. 넘으면 기록을 늘리는 요청(새 공간·방, 값이 든 줄)을 받지 않는다(507 server_full).
+export const MAX_DB_BYTES = 5 * 1024 ** 3;
+const STALE = '400 days'; // 이만큼 아무 기기도 동기화하지 않은 공간은 지운다 (읽기 알림·함께 읽기 방과 같다)
 const PAGE_ROWS = 5000; // 응답 하나에 담는 줄 수
 const PAGE_BYTES = 2 * 1024 * 1024;
 
@@ -111,11 +120,35 @@ export async function spaceIdFor(pool, req) {
   return r.rows[0]?.id ?? null;
 }
 
-/** push: createPushApi()가 만든 읽기 알림 요청 처리기. 없으면 /api/push/…는 503 */
-export function createHandler(pool, { push = null } = {}) {
-  const rooms = createRoomsApi(pool);
+/**
+ * 데이터베이스가 한도(maxBytes)를 넘었으면 507 server_full을 던지는 함수.
+ * 크기는 1분 동안 기억해 두고 쓴다 (요청마다 재지 않도록).
+ */
+export function storageGuard(pool, maxBytes = MAX_DB_BYTES) {
+  let size = 0;
+  let checkedAt = -Infinity;
+  return async function ensureStorage() {
+    if (Date.now() - checkedAt > 60 * 1000) {
+      size = Number((await pool.query('SELECT pg_database_size(current_database()) AS n')).rows[0].n);
+      checkedAt = Date.now();
+    }
+    if (size > maxBytes) throw new HttpError(507, 'server_full');
+  };
+}
+
+/**
+ * push: createPushApi()가 만든 읽기 알림 요청 처리기. 없으면 /api/push/…는 503
+ * limits: {maxSpaceRows, maxSpaceBytes, maxDbBytes} 저장 한도 (테스트에서 작게 준다)
+ */
+export function createHandler(pool, { push = null, limits = {} } = {}) {
+  const maxSpaceRows = limits.maxSpaceRows ?? MAX_SPACE_ROWS;
+  const maxSpaceBytes = limits.maxSpaceBytes ?? MAX_SPACE_BYTES;
+  const ensureStorage = storageGuard(pool, limits.maxDbBytes ?? MAX_DB_BYTES);
+  const rooms = createRoomsApi(pool, { ensureStorage });
 
   async function createSpace() {
+    await ensureStorage();
+    await pool.query(`DELETE FROM sync_spaces WHERE seen_at < now() - interval '${STALE}'`);
     for (let i = 0; i < 5; i++) {
       const code = newCode();
       const r = await pool.query(
@@ -192,10 +225,11 @@ export function createHandler(pool, { push = null } = {}) {
         );
         version += r.rowCount;
       }
+      // 크기 한도는 값이 든 줄이 있는 요청만 본다. 지우기만 하는 요청은 크기 한도를 넘었어도 받는다(줄 수 한도는 본다:
+      // 서버에 없던 줄을 지운 것으로 보내도 줄이 하나씩 생기므로).
+      const grows = changes.some((c) => c.d !== null);
+      if (grows) await ensureStorage();
       if (changes.length) {
-        const total = (await client.query('SELECT count(*)::int AS n FROM sync_rows WHERE space_id = $1', [space.id]))
-          .rows[0].n;
-        if (total + changes.length > MAX_SPACE_ROWS) throw new HttpError(413, 'space_full');
         await client.query(
           `INSERT INTO sync_rows (space_id, tbl, key, data, version)
            SELECT $1, c.t, c.k, c.d, $2 + c.n
@@ -204,6 +238,16 @@ export function createHandler(pool, { push = null } = {}) {
           [space.id, version, changes.map((c) => c.t), changes.map((c) => c.k), changes.map((c) => c.d)],
         );
         version += changes.length;
+      }
+      if (changes.length) {
+        // 넣은 뒤의 공간 줄 수·크기로 본다 (같은 줄을 고친 것은 늘지 않는다). 넘으면 이 요청을 되돌린다.
+        const { n, bytes } = (
+          await client.query(
+            'SELECT count(*)::int AS n, coalesce(sum(pg_column_size(data)), 0)::bigint AS bytes FROM sync_rows WHERE space_id = $1',
+            [space.id],
+          )
+        ).rows[0];
+        if (n > maxSpaceRows || (grows && Number(bytes) > maxSpaceBytes)) throw new HttpError(413, 'space_full');
       }
 
       // 이번에 보낸 줄(before 다음 번호들)은 돌려주지 않는다. 이 기기에 이미 있다.
@@ -287,7 +331,7 @@ export function createHandler(pool, { push = null } = {}) {
  * push: 읽기 알림 {publicKey, sender, interval}. sender(구독, 내용, 옵션)가 실제로 보내고,
  *       interval(ms)마다 보낼 알림을 찾는다(0이면 찾지 않는다: 테스트는 reminders.tick()을 직접 부른다).
  */
-export async function startServer({ databaseUrl, port = 5690, host = '127.0.0.1', push = null }) {
+export async function startServer({ databaseUrl, port = 5690, host = '127.0.0.1', push = null, limits = {} }) {
   const pool = new pg.Pool({ connectionString: databaseUrl, max: 10 });
   await pool.query(SCHEMA);
   await pool.query(PUSH_SCHEMA);
@@ -295,7 +339,7 @@ export async function startServer({ databaseUrl, port = 5690, host = '127.0.0.1'
   const reminders = push && createReminders(pool, push.sender);
   const pushApi =
     push && createPushApi(pool, { ...push, spaceIdFor: (req) => spaceIdFor(pool, req), deliver: reminders.deliver });
-  const server = http.createServer(createHandler(pool, { push: pushApi }));
+  const server = http.createServer(createHandler(pool, { push: pushApi, limits }));
   await new Promise((resolve) => server.listen(port, host, resolve));
   const tick = () => reminders.tick().catch((err) => console.error('읽기 알림 실패:', err.message));
   const timer = push?.interval ? setInterval(tick, push.interval) : null;
@@ -324,6 +368,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     databaseUrl: process.env.DATABASE_URL,
     port: Number(process.env.PORT ?? 5690),
     host: process.env.HOST ?? '127.0.0.1',
+    limits: process.env.SYNC_MAX_DB_BYTES ? { maxDbBytes: Number(process.env.SYNC_MAX_DB_BYTES) } : {},
     push:
       publicKey && privateKey
         ? { publicKey, sender: webPushSender({ publicKey, privateKey, subject }), interval: 30 * 1000 }
