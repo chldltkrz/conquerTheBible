@@ -18,6 +18,7 @@ import { currentAccount, listAccounts, listPlans, planOn, roomMemberships } from
 import {
   createRoom,
   deleteRoom,
+  isOwnRoom,
   isRoomActive,
   joinProblem,
   joinRoom,
@@ -58,6 +59,9 @@ const sortMembers = (members) => [...members.filter((x) => x.me), ...members.fil
 /** 방 소식을 아직 받지 않았거나 받지 못했을 때 보여 줄 말 */
 const waitingText = (data) => (data?.error ? data.error.message : '방 소식을 받는 중…');
 
+/** 방 이름 아래 한 줄: 같은 계획 방은 계획 이름과 기간, 각자 계획 방은 그렇다고만 */
+const roomSubtitle = (m, room) => (isOwnRoom(m) ? '각자 계획으로 읽기' : `${room ? `${room.plan.title} · ` : ''}${periodLabel(m)}`);
+
 // ── 오늘 화면 ──────────────────────────────────────────────
 
 const asked = new Set(); // 이 기기에서 소식을 받아 보려 한 방 (다른 기기에서 들어간 방이 동기화로 왔을 때 한 번 받는다)
@@ -92,10 +96,10 @@ function roomCard(m, now) {
     body = html`<span class="room-line">${waitingText(data)}</span>`;
   } else {
     const members = sortMembers(roomMembers(m, room, now));
-    if (compareDate(now, m.start) < 0) {
+    if (!isOwnRoom(m) && compareDate(now, m.start) < 0) {
       body = html`<b class="room-tally">${formatDate(m.start)}에 시작합니다</b>
         <span class="room-line">${members.length}명이 함께 읽습니다</span>`;
-    } else if (compareDate(now, m.end) > 0) {
+    } else if (!isOwnRoom(m) && compareDate(now, m.end) > 0) {
       const done = members.filter((x) => x.progress === 100).length;
       body = html`<b class="room-tally">계획이 끝났습니다</b>
         <span class="room-line">${members.length}명 중 ${done}명이 끝까지 읽었습니다</span>`;
@@ -111,7 +115,7 @@ function roomCard(m, now) {
   return html`<button class="card room-card" data-room-open="${m.code}" aria-label="${m.name} 방 자세히 보기">
     <span class="room-card-head">
       <span class="room-icon">${roomIcon}</span>
-      <span class="room-card-title"><b>${m.name}</b><small>${room ? `${room.plan.title} · ` : ''}${periodLabel(m)}</small></span>
+      <span class="room-card-title"><b>${m.name}</b><small>${roomSubtitle(m, room)}</small></span>
       <span class="chev" aria-hidden="true">›</span>
     </span>
     ${body}
@@ -135,9 +139,9 @@ function roomAreaInner(now) {
 /** 오늘 화면의 "함께 읽기" 자리. 방 소식을 새로 받으면 이 자리만 다시 그린다 */
 export const roomArea = (now = today()) => html`<div id="room-area">${roomAreaInner(now)}</div>`;
 
-/** 오늘 화면 아래쪽의 "함께 읽기 방 만들기" (그 계획의 기간에 들어간 방이 없을 때만) */
+/** 오늘 화면 아래쪽의 "함께 읽기 방 만들기" (그 계획의 기간에 들어간 방도, 각자 계획 방도 없을 때만) */
 export function roomCreateCard(plan) {
-  if (roomMemberships(plan.accountId).some((m) => periodsOverlap(m, plan))) return '';
+  if (roomMemberships(plan.accountId).some((m) => isOwnRoom(m) || periodsOverlap(m, plan))) return '';
   return html`<button class="card card-link room-create" data-action="room-create">
     <span class="room-icon">${roomIcon}</span>
     <span><b>함께 읽기 방 만들기</b><small>가족·구역 사람들과 이 계획을 같이 읽고, 오늘 누가 읽었는지 봅니다</small></span>
@@ -154,12 +158,12 @@ if (typeof window !== 'undefined') {
 
 // ── 방 창 ──────────────────────────────────────────────────
 
-/** 방 창에 보여 줄 날들: 오늘까지 최근 7일 (계획 기간 안에서). 시작 전이면 [] */
+/** 방 창에 보여 줄 날들: 오늘까지 최근 7일 (같은 계획 방은 계획 기간 안에서). 시작 전이면 [] */
 function weekOf(m, now) {
-  const last = compareDate(now, m.end) > 0 ? m.end : now;
-  if (compareDate(last, m.start) < 0) return [];
+  const last = !isOwnRoom(m) && compareDate(now, m.end) > 0 ? m.end : now;
+  if (!isOwnRoom(m) && compareDate(last, m.start) < 0) return [];
   let first = addDays(last, -6);
-  if (compareDate(first, m.start) < 0) first = m.start;
+  if (!isOwnRoom(m) && compareDate(first, m.start) < 0) first = m.start;
   const days = [];
   for (let d = first; compareDate(d, last) <= 0; d = addDays(d, 1)) days.push(d);
   return days;
@@ -206,13 +210,14 @@ function memberList(members, week, now, owner) {
 }
 
 function roomHero(m, room, members, now) {
-  if (compareDate(now, m.start) < 0) {
+  const own = isOwnRoom(m);
+  if (!own && compareDate(now, m.start) < 0) {
     return html`<div class="sheet-hero">
       <p class="hero-label">${formatDate(m.start)}에 시작합니다</p>
       <p class="hero-sub">${room.plan.title} · ${members.length}명이 함께 읽습니다</p>
     </div>`;
   }
-  if (compareDate(now, m.end) > 0) {
+  if (!own && compareDate(now, m.end) > 0) {
     const done = members.filter((x) => x.progress === 100).length;
     return html`<div class="sheet-hero">
       <p class="hero-num">${done}<small>/${members.length}명</small></p>
@@ -224,7 +229,7 @@ function roomHero(m, room, members, now) {
   return html`<div class="sheet-hero">
     <p class="hero-num">${read}<small>/${reading}명</small></p>
     <p class="hero-label">오늘 읽음</p>
-    <p class="hero-sub">${room.plan.title}${reading < members.length ? ` · 오늘 분량이 있는 ${reading}명 중` : ''}</p>
+    <p class="hero-sub">${own ? '각자 계획으로 읽기' : room.plan.title}${reading < members.length ? ` · 오늘 분량이 있는 ${reading}명 중` : ''}</p>
   </div>`;
 }
 
@@ -262,7 +267,7 @@ export function openRoomSheet(code, changed = () => {}) {
           <span class="sheet-grip" aria-hidden="true"></span>
           <div class="sheet-title-row">
             <div>
-              <p class="eyebrow">함께 읽기 · ${periodLabel(m)}</p>
+              <p class="eyebrow">함께 읽기 · ${roomSubtitle(m, null)}</p>
               <h2 id="room-title">${m.name}</h2>
             </div>
             <button class="icon-btn" data-close aria-label="닫기">✕</button>
@@ -277,7 +282,10 @@ export function openRoomSheet(code, changed = () => {}) {
           <div class="button-row">
             <button class="btn btn-primary" data-room-invite>${roomIcon}<span>함께 읽을 사람 초대하기</span></button>
           </div>
-          <p class="sheet-note">방 사람들에게는 이 방에서 쓰는 이름과 날짜별 읽음, 계획 진도만 보입니다.
+          <p class="sheet-note">${isOwnRoom(m)
+            ? `각자 자기 계획으로 읽는 방입니다. 방 사람들에게는 이 방에서 쓰는 이름과 날짜별로 그날 분량을 몇 퍼센트 읽었는지,
+              지금 읽는 계획의 진도만 보이고 무엇을 읽는지(계획 이름·본문)는 보이지 않습니다.`
+            : '방 사람들에게는 이 방에서 쓰는 이름과 날짜별 읽음, 계획 진도만 보입니다.'}
             묵상 메모와 저장한 구절, 다른 계획은 보이지 않습니다. 한 방에는 ${MAX_MEMBERS}명까지 들어올 수 있습니다.</p>
           <div class="room-leave">
             <button class="link danger" data-room-leave>방에서 나가기</button>
@@ -399,7 +407,7 @@ export function openInviteDialog(m, { fresh = false } = {}) {
       toast(ok ? '링크를 복사했습니다' : '복사하지 못했습니다');
       if (ok) track('room_invite_shared', { how: 'copy' });
     } else if (e.target.closest('[data-share]')) {
-      const what = plan ? ` ${plan.title}(${periodLabel(m)})` : '';
+      const what = isOwnRoom(m) ? ' 각자 계획으로' : plan ? ` ${plan.title}(${periodLabel(m)})` : '';
       navigator
         .share({ title: `맛있는만나 함께 읽기 · ${m.name}`, text: `맛있는만나에서${what} 함께 읽어요. ${m.name} 방 초대 링크입니다.`, url: link })
         .then(() => track('room_invite_shared', { how: 'share' }))
@@ -457,8 +465,8 @@ function planStatus(p, now, rooms) {
 }
 
 /**
- * 방을 만드는 창. 지금 계정의 오늘 계획과 앞으로 시작할 계획 중에서 고르고, 다음 계획이 아직 없으면
- * 새 계획 화면에서 만든 뒤 돌아온다. 만들면 초대 창을 띄운다.
+ * 방을 만드는 창. 같은 계획을 함께 읽을지, 각자 계획으로 읽을지 고른다. 같은 계획이면 지금 계정의 오늘 계획과
+ * 앞으로 시작할 계획 중에서 고르고, 다음 계획이 아직 없으면 새 계획 화면에서 만든 뒤 돌아온다. 만들면 초대 창을 띄운다.
  * @param {object|null} plan 먼저 골라 둘 계획 (없으면 아직 방이 없는 가장 이른 계획)
  * @param {{done?: () => void, name?: string, memberName?: string}} [opts] done: 만든 뒤 부른다 (화면을 다시 그린다)
  */
@@ -466,7 +474,7 @@ export function openRoomCreate(plan = null, { done = () => {}, name = '', member
   const now = today();
   const acc = currentAccount();
   const plans = roomPlanChoices(now);
-  const rooms = roomMemberships(acc.id);
+  const rooms = roomMemberships(acc.id).filter((m) => !isOwnRoom(m));
   const roomsOf = (p) => rooms.filter((m) => periodsOverlap(m, p));
   const chosen = plans.find((p) => p.id === plan?.id) ?? plans.find((p) => !roomsOf(p).length) ?? plans[0];
   const next = nextPlanPeriod(plans, now);
@@ -476,21 +484,35 @@ export function openRoomCreate(plan = null, { done = () => {}, name = '', member
     dlg,
     html`<form>
       <h2>함께 읽기 방 만들기</h2>
-      <p>함께 읽을 계획을 고르세요. 초대받은 사람에게는 같은 계획이 만들어지고, 서로 오늘 읽었는지 볼 수 있습니다.</p>
-      ${plans.length
-        ? html`<div class="room-plans" role="radiogroup" aria-label="함께 읽을 계획">
-            ${plans.map(
-              (p) => html`<label class="room-plan">
-                <input type="radio" name="plan" value="${p.id}" ${p === chosen ? 'checked' : ''} />
-                <span><b>${p.title}</b><small>${periodLabel(p, { year: p.start.y !== now.y })} · ${planStatus(p, now, roomsOf(p))}</small></span>
-              </label>`,
-            )}
-          </div>`
-        : html`<p class="muted small">함께 읽을 계획이 아직 없습니다. 먼저 계획을 만들어 주세요.</p>`}
-      <button type="button" class="room-plan is-new" data-new-plan>
-        <span><b>${next.label} 새로 만들기</b><small>계획을 저장하면 이 창으로 돌아옵니다</small></span>
-        <span class="chev" aria-hidden="true">›</span>
-      </button>
+      <div class="room-plans room-kinds" role="radiogroup" aria-label="어떻게 함께 읽을까요?">
+        <label class="room-plan">
+          <input type="radio" name="kind" value="same" checked />
+          <span><b>같은 계획을 함께</b><small>모두 같은 본문을 같은 날 읽습니다</small></span>
+        </label>
+        <label class="room-plan">
+          <input type="radio" name="kind" value="own" />
+          <span><b>각자 계획으로</b><small>각자 자기 계획으로 읽고, 읽은 퍼센트와 진도만 나눕니다</small></span>
+        </label>
+      </div>
+      <div data-kind="same">
+        <p>함께 읽을 계획을 고르세요. 초대받은 사람에게는 같은 계획이 만들어지고, 서로 오늘 읽었는지 볼 수 있습니다.</p>
+        ${plans.length
+          ? html`<div class="room-plans" role="radiogroup" aria-label="함께 읽을 계획">
+              ${plans.map(
+                (p) => html`<label class="room-plan">
+                  <input type="radio" name="plan" value="${p.id}" ${p === chosen ? 'checked' : ''} />
+                  <span><b>${p.title}</b><small>${periodLabel(p, { year: p.start.y !== now.y })} · ${planStatus(p, now, roomsOf(p))}</small></span>
+                </label>`,
+              )}
+            </div>`
+          : html`<p class="muted small">함께 읽을 계획이 아직 없습니다. 먼저 계획을 만들어 주세요.</p>`}
+        <button type="button" class="room-plan is-new" data-new-plan>
+          <span><b>${next.label} 새로 만들기</b><small>계획을 저장하면 이 창으로 돌아옵니다</small></span>
+          <span class="chev" aria-hidden="true">›</span>
+        </button>
+      </div>
+      <p data-kind="own" hidden>들어온 사람의 계획은 바뀌지 않습니다. 저마다 오늘 읽을 분량을 몇 퍼센트 읽었는지와 지금 읽는
+        계획의 진도만 방에 보이고, 무엇을 읽는지는 보이지 않습니다. 기간이 없어 계획을 새로 만들어도 방은 이어집니다.</p>
       <label class="field">
         <span>방 이름</span>
         <input name="name" value="${name}" maxlength="${ROOM_NAME_MAX}" placeholder="예: 사랑구역, 우리 가족" required autocomplete="off" />
@@ -508,6 +530,13 @@ export function openRoomCreate(plan = null, { done = () => {}, name = '', member
   );
   const form = dlg.querySelector('form');
   const error = dlg.querySelector('.form-error');
+  const submit = form.querySelector('.btn-primary');
+  const kind = () => form.kind.value;
+  form.addEventListener('change', (e) => {
+    if (e.target.name !== 'kind') return;
+    form.querySelectorAll('[data-kind]').forEach((el) => (el.hidden = el.dataset.kind !== kind()));
+    submit.disabled = kind() === 'same' && !plans.length;
+  });
   dlg.addEventListener('click', (e) => {
     if (e.target.closest('[data-close]')) return dlg.close();
     if (e.target.closest('[data-new-plan]')) {
@@ -519,11 +548,11 @@ export function openRoomCreate(plan = null, { done = () => {}, name = '', member
   });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const picked = plans.find((p) => String(p.id) === form.querySelector('input[name=plan]:checked')?.value);
+    const own = kind() === 'own';
+    const picked = own ? null : plans.find((p) => String(p.id) === form.querySelector('input[name=plan]:checked')?.value);
     const name = form.name.value.trim();
     const memberName = form.member.value.trim();
-    if (!picked || !name || !memberName) return;
-    const submit = form.querySelector('.btn-primary');
+    if ((!own && !picked) || !name || !memberName) return;
     submit.disabled = true;
     error.hidden = true;
     let code;
@@ -535,14 +564,20 @@ export function openRoomCreate(plan = null, { done = () => {}, name = '', member
       submit.disabled = false;
       return;
     }
-    track('room_created', {
-      plan_mode: picked.mode,
-      plan_length: picked.length,
-      starts_in_days: Math.max(0, daysBetween(now, picked.start)),
-    });
+    track(
+      'room_created',
+      own
+        ? { kind: 'own' }
+        : {
+            kind: 'same',
+            plan_mode: picked.mode,
+            plan_length: picked.length,
+            starts_in_days: Math.max(0, daysBetween(now, picked.start)),
+          },
+    );
     dlg.close();
     done();
-    const m = roomMemberships(picked.accountId).find((x) => x.code === code);
+    const m = roomMemberships(picked?.accountId ?? acc.id).find((x) => x.code === code);
     if (m) openInviteDialog(m, { fresh: true });
   });
   dlg.addEventListener('close', () => dlg.remove());
@@ -555,6 +590,10 @@ export function openRoomCreate(plan = null, { done = () => {}, name = '', member
 
 /** 들어가면 계획이 어떻게 되는지 */
 function planNote(found) {
+  if (isOwnRoom(found.plan)) {
+    return html`각자 계획으로 읽는 방입니다. 내 계획은 바뀌지 않고, 그날 분량을 몇 퍼센트 읽었는지와 진도만 방에 보입니다.
+      ${planOn(today()) ? '' : html`<small class="notice-sub">오늘 읽는 계획이 없습니다. 들어간 뒤 계획을 만들면 그때부터 방에 올라갑니다.</small>`}`;
+  }
   const { same, overlaps: list } = plansForRoom(found.plan);
   if (same) return html`이미 같은 계획(<b>${same.title}</b>)이 있어 그 계획을 그대로 이어 읽습니다.`;
   if (list.length) {
@@ -598,7 +637,9 @@ export function openRoomJoin(prefill = '', { via = 'code', done = () => {} } = {
       html`<form data-step="join">
         <p class="eyebrow">함께 읽기 방</p>
         <h2>${found.name}</h2>
-        <p class="room-join-plan"><b>${found.plan.title}</b> · ${periodLabel(found.plan)}<br />
+        <p class="room-join-plan">${isOwnRoom(found.plan)
+          ? html`<b>각자 계획으로 읽기</b>`
+          : html`<b>${found.plan.title}</b> · ${periodLabel(found.plan)}`}<br />
           <small>${found.members.length}명이 함께 읽는 중: ${shown}</small></p>
         <label class="field">
           <span>방에서 보일 내 이름</span>
@@ -659,7 +700,12 @@ export function openRoomJoin(prefill = '', { via = 'code', done = () => {} } = {
       track('room_join_failed', { reason: err.code ?? 'error', via });
       return fail(form, err.message);
     }
-    track('room_joined', { result, via, members: found.members.length + 1, plan_mode: found.plan.mode, plan_length: found.plan.length });
+    track('room_joined', {
+      result,
+      via,
+      members: found.members.length + 1,
+      ...(isOwnRoom(found.plan) ? { kind: 'own' } : { kind: 'same', plan_mode: found.plan.mode, plan_length: found.plan.length }),
+    });
     dlg.close();
     toast(result === 'saved' ? `${found.name} 방에 들어가 계획을 만들었습니다` : `${found.name} 방에 들어갔습니다`);
     done();
@@ -696,18 +742,20 @@ export function roomSection() {
         ? html`<ul class="room-list">
             ${list.map((m) => {
               const n = roomData(m.code)?.room?.members.length;
-              const ended = compareDate(now, m.end) > 0;
+              const own = isOwnRoom(m);
+              const ended = !own && compareDate(now, m.end) > 0;
               return html`<li>
                 <button class="room-item" data-room-open="${m.code}" aria-label="${m.name} 방 자세히 보기">
                   <span class="room-icon">${roomIcon}</span>
                   <span class="account-text"><b>${m.name}</b>
-                    <small>${periodLabel(m, { year: m.start.y !== now.y })}${n ? ` · ${n}명` : ''}${ended ? ' · 끝남' : ''}</small></span>
+                    <small>${own ? '각자 계획' : periodLabel(m, { year: m.start.y !== now.y })}${n ? ` · ${n}명` : ''}${ended ? ' · 끝남' : ''}</small></span>
                   <span class="chev" aria-hidden="true">›</span>
                 </button>
               </li>`;
             })}
           </ul>`
-        : html`<p>가족·구역·목장 사람들과 <b>같은 계획</b>을 함께 읽으며, 오늘 누가 읽었는지 봅니다 ("오늘 5명 중 3명 읽음").</p>`}
+        : html`<p>가족·구역·목장 사람들과 함께 읽으며, 오늘 누가 읽었는지 봅니다 ("오늘 5명 중 3명 읽음").
+            <b>같은 계획</b>을 함께 읽거나, <b>각자 계획</b>으로 읽고 읽은 퍼센트와 진도만 나눌 수 있습니다.</p>`}
       <p class="muted small">방을 만들면 초대 코드와 링크가 나옵니다. 방 사람들에게는 방에서 쓰는 이름과 날짜별 읽음, 계획 진도만 보이고
         묵상 메모와 저장한 구절은 보이지 않습니다.${listAccounts().length > 1 ? ' 계정마다 따로 들어갑니다.' : ''}</p>
       <div class="button-row">

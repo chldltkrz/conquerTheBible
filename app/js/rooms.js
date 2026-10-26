@@ -1,5 +1,10 @@
-// 함께 읽기 방: 같은 계획을 가족·구역·목장이 함께 읽으며 서로 오늘 읽었는지 본다 ("오늘 5명 중 3명 읽음").
+// 함께 읽기 방: 가족·구역·목장이 함께 읽으며 서로 오늘 읽었는지 본다 ("오늘 5명 중 3명 읽음").
 // 서버는 server/rooms.mjs, 이 기기에 둔 방 목록은 db.js의 room_memberships(동기화된다).
+//
+// 방은 두 가지다 (멤버십의 kind, 서버에 둔 방의 plan으로 안다).
+//   'same': 같은 계획을 함께 읽는 방. 방에 계획 정의를 두고, 들어오는 사람에게 같은 계획을 만든다. 기간이 그 계획의 기간이다.
+//   'own':  각자 계획으로 읽는 방. 방의 plan은 {kind: 'own'}뿐이고, 들어와도 계획을 만들거나 바꾸지 않는다.
+//           멤버마다 자기 계획으로 그날 분량을 몇 퍼센트 읽었는지와 지금 읽는 계획의 진도만 나눈다. 기간이 없다.
 //
 // 방에는 초대 코드로 들어간다. 동기화 코드와 꼴은 같지만 따로 만든 코드라서, 방 사람들에게는 방 이름과
 // 멤버 이름, 날짜별로 그날 분량을 몇 퍼센트 읽었는지, 계획 전체 진도만 보인다. (메모·저장한 구절은 보내지 않는다)
@@ -35,6 +40,11 @@ export const MEMBER_NAME_MAX = 20;
 const UPLOAD_DELAY = 2000; // 기록을 바꾸고 올리기까지 (이어서 누르는 것을 한 번에)
 const POLL_INTERVAL = 60 * 1000;
 const UPLOAD_AFTER_END = 30; // 계획이 끝난 뒤에도 이만큼(일)은 늦게 읽은 것을 올린다
+const OWN_DAYS = 14; // 각자 계획 방에 올리는 날 수 (오늘까지. 방 창에는 최근 7일이 보인다)
+const OWN_PLAN = { kind: 'own' }; // 각자 계획 방의 plan (서버는 해석하지 않고 그대로 돌려준다)
+
+/** 각자 계획으로 읽는 방인지 (멤버십이나 방의 계획) */
+export const isOwnRoom = (x) => x?.kind === 'own';
 
 const hasWindow = typeof window !== 'undefined';
 
@@ -152,8 +162,12 @@ function validSelection(sel) {
   });
 }
 
-/** 서버에서 받은 계획 정의를 확인한다 → {title, start, end, length, mode, splitChapters, selection, tracks} 또는 null */
+/**
+ * 서버에서 받은 계획 정의를 확인한다 → {kind: 'same', title, start, end, length, mode, splitChapters, selection, tracks},
+ * 각자 계획 방이면 {kind: 'own'}, 틀렸으면 null
+ */
 export function checkRoomPlan(def) {
+  if (isOwnRoom(def)) return { ...OWN_PLAN };
   if (!def || typeof def.title !== 'string' || !validDate(def.start) || !validDate(def.end) || !MODES.has(def.mode)) return null;
   if (!validSelection(def.selection) || !Array.isArray(def.tracks) || !def.tracks.length || def.tracks.length > 66) return null;
   if (!def.tracks.every((t) => typeof t?.title === 'string' && validSelection(t.selection))) return null;
@@ -162,6 +176,7 @@ export function checkRoomPlan(def) {
   const length = daysBetween(start, end) + 1;
   if (!(length >= 1 && length <= MAX_PLAN_DAYS)) return null;
   return {
+    kind: 'same',
     title: def.title.slice(0, 100),
     start,
     end,
@@ -203,14 +218,16 @@ export const periodsOverlap = (a, b) => compareDate(a.start, b.end) <= 0 && comp
 
 /**
  * 지금 계정이 찾은 방(lookupRoom)에 들어갈 수 없는 까닭. 들어갈 수 있으면 null.
- * 한 계정은 한 날짜에 계획이 하나뿐이라, 같은 기간에 여러 방에 들어가려면 방들의 계획이 같아야 한다.
+ * 한 계정은 한 날짜에 계획이 하나뿐이라, 같은 기간에 같은 계획 방 여럿에 들어가려면 방들의 계획이 같아야 한다.
+ * 각자 계획 방은 계획을 바꾸지 않으므로 다른 방과 부딪히지 않는다.
  */
 export function joinProblem(found, now = today()) {
   if (found.members.length >= MAX_MEMBERS) return MESSAGES.room_full;
+  if (isOwnRoom(found.plan)) return null;
   if (compareDate(found.plan.end, now) < 0) return `이 방의 계획은 ${formatDate(found.plan.end)}에 끝났습니다.`;
   if (!plansForRoom(found.plan).same) {
     // 들어가면 겹치는 계획이 방의 계획으로 바뀌어, 그 계획으로 함께 읽던 다른 방에 올라가는 읽음이 달라진다
-    const other = roomMemberships(currentAccount().id).find((x) => periodsOverlap(x, found.plan));
+    const other = roomMemberships(currentAccount().id).find((x) => !isOwnRoom(x) && periodsOverlap(x, found.plan));
     if (other) return `같은 기간에 ${other.name} 방에서 다른 계획을 읽고 있습니다. 그 방에서 나온 뒤 들어올 수 있습니다.`;
   }
   return null;
@@ -236,6 +253,10 @@ export function memberStatus(accountId, start, end, now = today()) {
   return { days, progress: current ? Math.min(100, progressOf(current).percent) : null };
 }
 
+/** 그 방에 올릴 내 읽음. 각자 계획 방은 오늘까지 최근 OWN_DAYS일, 진도는 오늘 읽는 계획의 것 */
+export const statusFor = (m, now = today()) =>
+  isOwnRoom(m) ? memberStatus(m.accountId, addDays(now, 1 - OWN_DAYS), now, now) : memberStatus(m.accountId, m.start, m.end, now);
+
 // ── 방 소식 ────────────────────────────────────────────────
 
 /** code → {room, error}. room: 서버에서 받은 방 {name, plan(확인한 정의), members}. 받지 못했으면 error */
@@ -248,8 +269,8 @@ function notify(name, detail = null) {
   if (hasWindow) window.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
-/** 계획이 시작하기 전이거나 끝난 지 오래되지 않은 방 (오늘 화면에 보인다) */
-export const isRoomActive = (m, now = today()) => compareDate(now, addDays(m.end, 3)) <= 0;
+/** 계획이 시작하기 전이거나 끝난 지 오래되지 않은 방, 그리고 각자 계획 방 (오늘 화면에 보인다) */
+export const isRoomActive = (m, now = today()) => isOwnRoom(m) || compareDate(now, addDays(m.end, 3)) <= 0;
 
 /** 방이 없어졌거나 내보내졌다: 이 기기의 방 목록에서 뺀다 (동기화하면 다른 기기에서도) */
 async function dropMembership(m) {
@@ -309,7 +330,7 @@ let uploading = null;
 let again = false;
 
 async function uploadOne(m, colors) {
-  const body = { name: m.memberName, color: colors.get(m.accountId), ...memberStatus(m.accountId, m.start, m.end) };
+  const body = { name: m.memberName, color: colors.get(m.accountId), ...statusFor(m) };
   const key = `${m.code} ${m.memberId}`;
   const text = JSON.stringify(body);
   if (lastSent.get(key) === text) return;
@@ -335,7 +356,7 @@ export function uploadRooms() {
         again = false;
         const now = today();
         const colors = new Map(listAccounts().map((a) => [a.id, a.color]));
-        const list = roomMemberships().filter((m) => compareDate(now, addDays(m.end, UPLOAD_AFTER_END)) <= 0);
+        const list = roomMemberships().filter((m) => isOwnRoom(m) || compareDate(now, addDays(m.end, UPLOAD_AFTER_END)) <= 0);
         for (const m of list) await uploadOne(m, colors);
       } while (again);
     } finally {
@@ -374,19 +395,22 @@ export function initRooms() {
 
 // ── 만들기·들어가기·나가기 ─────────────────────────────────
 
-/** 이 계획으로 방을 만든다. 초대 코드를 돌려준다 */
+/** 이 계획으로 방을 만든다. plan이 null이면 지금 계정으로 각자 계획 방을 만든다. 초대 코드를 돌려준다 */
 export async function createRoom(plan, { name, memberName }) {
-  const color = listAccounts().find((a) => a.id === plan.accountId)?.color;
-  const res = await request('POST', '', { body: { name, plan: roomPlanOf(plan), member: { name: memberName, color } } });
+  const accountId = plan?.accountId ?? currentAccount().id;
+  const color = listAccounts().find((a) => a.id === accountId)?.color;
+  const def = plan ? roomPlanOf(plan) : OWN_PLAN;
+  const res = await request('POST', '', { body: { name, plan: def, member: { name: memberName, color } } });
   await saveRoomMembership({
-    accountId: plan.accountId,
+    accountId,
     code: res.code,
     memberId: res.member.id,
     memberKey: res.member.key,
     name,
     memberName,
-    start: plan.start,
-    end: plan.end,
+    kind: plan ? 'same' : 'own',
+    start: plan?.start ?? today(),
+    end: plan?.end,
   });
   await uploadRooms();
   refreshRooms();
@@ -404,19 +428,21 @@ export async function lookupRoom(input) {
 }
 
 /**
- * 지금 계정으로 찾은 방에 들어간다. 같은 계획이 없으면 방의 계획을 저장한다(겹치는 계획은 savePlan처럼 바뀐다).
- * @returns {Promise<'same'|'saved'>} 있던 계획을 그대로 쓰는지, 방의 계획을 새로 저장했는지
+ * 지금 계정으로 찾은 방에 들어간다. 같은 계획 방이면 같은 계획이 없을 때 방의 계획을 저장한다(겹치는 계획은
+ * savePlan처럼 바뀐다). 각자 계획 방이면 계획은 그대로 둔다.
+ * @returns {Promise<'same'|'saved'|'own'>} 있던 계획을 그대로 쓰는지, 방의 계획을 새로 저장했는지, 각자 계획 방인지
  */
 export async function joinRoom(found, memberName) {
   const problem = joinProblem(found);
   if (problem) throw new RoomError('blocked', 0, problem);
   const acc = currentAccount();
   const plan = found.plan;
+  const own = isOwnRoom(plan);
   const member = await request('POST', '/members', { code: found.code, body: { name: memberName, color: acc.color } });
   const membership = { memberId: member.id, memberKey: member.key };
-  let result = 'same';
+  let result = own ? 'own' : 'same';
   try {
-    if (!plansForRoom(plan).same) {
+    if (!own && !plansForRoom(plan).same) {
       await savePlan({
         start: plan.start,
         end: plan.end,
@@ -434,7 +460,8 @@ export async function joinRoom(found, memberName) {
       ...membership,
       name: found.name,
       memberName,
-      start: plan.start,
+      kind: own ? 'own' : 'same',
+      start: own ? today() : plan.start,
       end: plan.end,
     });
   } catch (err) {
@@ -500,18 +527,19 @@ function readingDates(room) {
 
 /**
  * 방 멤버들과 그날 읽음. 내 줄은 서버 소식 대신 이 기기의 기록으로 바로 보여 준다(방금 읽음 표시한 것도).
- * 아직 한 번도 올리지 않은 멤버(waiting)는 방의 계획에 그날 분량이 있으면 0으로 센다.
+ * 아직 한 번도 올리지 않은 멤버(waiting)는 같은 계획 방이면 방의 계획에 그날 분량이 있을 때 0으로 센다.
+ * 각자 계획 방은 그 사람의 계획을 모르므로 세지 않는다.
  * @returns {Array<{id, name, color, owner, me, waiting, days, progress, pct}>} pct: 그날 분량을 몇 퍼센트 읽었는지(분량이 없으면 null)
  */
 export function roomMembers(m, room, date = today()) {
   const iso = toISO(date);
-  const mine = { ...memberStatus(m.accountId, m.start, m.end), name: m.memberName, me: true };
+  const mine = { ...statusFor(m), name: m.memberName, me: true };
   const color = listAccounts().find((a) => a.id === m.accountId)?.color;
   const members = room.members.map((x) => (x.id === m.memberId ? { ...x, ...mine, color } : { ...x, me: false }));
   if (!members.some((x) => x.me)) members.push({ id: m.memberId, owner: false, color, ...mine });
   return members.map((x) => {
     const waiting = !x.me && !Object.keys(x.days ?? {}).length;
-    const pct = x.days?.[iso] ?? (waiting && readingDates(room).has(iso) ? 0 : null);
+    const pct = x.days?.[iso] ?? (waiting && !isOwnRoom(room.plan) && readingDates(room).has(iso) ? 0 : null);
     return { ...x, waiting, pct };
   });
 }

@@ -336,10 +336,10 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
         : ''}`;
   };
 
-  /** 이 기간에 함께 읽기 방에서 읽고 있으면: 계획을 바꾸면 방 사람들과 분량이 달라진다 */
+  /** 이 기간에 같은 계획 방에서 읽고 있으면: 계획을 바꾸면 방 사람들과 분량이 달라진다 (각자 계획 방은 상관없다) */
   const roomNotice = (start, end) => {
     const rooms = roomMemberships(currentAccount().id).filter(
-      (m) => compareDate(m.start, end) <= 0 && compareDate(start, m.end) <= 0,
+      (m) => m.kind !== 'own' && compareDate(m.start, end) <= 0 && compareDate(start, m.end) <= 0,
     );
     if (!rooms.length) return '';
     return html`<p class="notice">이 기간에는 ${rooms.map((m, i) => html`${i ? ', ' : ''}<b>${m.name}</b>`)} 방에서 함께 읽고 있습니다.

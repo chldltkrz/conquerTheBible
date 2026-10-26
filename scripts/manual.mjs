@@ -585,12 +585,22 @@ const SHOT_LIST = [
       await p.fill('dialog[open] [name=name]', '사랑구역');
     },
     marks: [
-      m('dialog[open] .room-plans'),
+      m('dialog[open] .room-kinds'),
+      m('dialog[open] [data-kind="same"] .room-plans'),
       m('dialog[open] [data-new-plan]'),
       m('dialog[open] .field', { nth: 0 }),
       m('dialog[open] .field', { nth: 1 }),
       m('dialog[open] .dialog-actions .btn-primary'),
     ],
+  },
+  {
+    name: 'room-own',
+    prep: async (p) => {
+      await click(p, '[data-action="room-create"]');
+      await click(p, 'dialog[open] .room-kinds input[value="own"]');
+      await p.fill('dialog[open] [name=name]', '우리 목장');
+    },
+    marks: [m('dialog[open] .room-kinds .room-plan', { nth: 1 }), m('dialog[open] p[data-kind="own"]')],
   },
   {
     name: 'room-invite',

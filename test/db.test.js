@@ -445,8 +445,7 @@ test('v9: 에스겔서 15장을 7절(예전 끝)까지 읽던 구간을 8절까�
     tracks: [{ title: '에스겔서', days: days.map((segments) => ({ segments, chars: 10 })) }],
   });
   db.run("INSERT INTO sync_state (key, value) VALUES ('tracking', '1')");
-  db.exec('PRAGMA user_version = 8');
-  assert.equal(migrate(db), true);
+  db.exec(MIGRATIONS[8]); // v9만 다시 (뒤의 마이그레이션은 이미 적용된 표를 바꾼다)
 
   const segs = rows(db, `SELECT segments FROM plan_days WHERE plan_id = ${planId} ORDER BY day`).map(([s]) => JSON.parse(s));
   assert.deepEqual(segs, [

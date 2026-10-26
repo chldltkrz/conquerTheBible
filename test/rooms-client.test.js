@@ -16,6 +16,7 @@ import {
   rebalancePlan,
   roomMemberships,
   savePlan,
+  saveRoomMembership,
   setRead,
   switchAccount,
   syncCollect,
@@ -28,6 +29,7 @@ import {
   configureRooms,
   createRoom,
   deleteRoom,
+  isRoomActive,
   joinProblem,
   joinRoom,
   leaveRoom,
@@ -41,6 +43,7 @@ import {
   roomPlanOf,
   roomPlanTracks,
   roomTally,
+  statusFor,
   uploadRooms,
 } from '../app/js/rooms.js';
 
@@ -136,6 +139,35 @@ test('올릴 읽음: 분량이 있는 날마다 퍼센트, 계획 전체 진도.
   // 기간 밖(앞뒤)의 날은 넣지 않는다
   s = memberStatus(1, addDays(START, -3), addDays(END, 3));
   assert.equal(Object.keys(s.days).length, 10);
+});
+
+test('각자 계획 방: 계획 정의는 {kind: "own"}뿐이고, 기간 없이 오늘까지 최근 14일과 오늘 계획의 진도를 올린다', { skip: noIndex }, async () => {
+  assert.deepEqual(checkRoomPlan({ kind: 'own' }), { kind: 'own' });
+  assert.equal(checkRoomPlan({ kind: 'own', title: 1 }).kind, 'own');
+  device();
+  const id = await lukePlan();
+  assert.equal(checkRoomPlan(roomPlanOf(getPlan(id))).kind, 'same');
+  await setRead(id, 1, true);
+
+  await saveRoomMembership({ accountId: 1, code: 'OWNR-ROOM-CODE', memberId: 'M', memberKey: 'K', name: '각자', memberName: '나', kind: 'own', start: today() });
+  const [m] = roomMemberships();
+  assert.equal(m.kind, 'own');
+  assert.equal(m.end, null, '각자 계획 방은 기간이 없다');
+  assert.equal(isRoomActive(m, addDays(today(), 500)), true);
+
+  // 계획이 그저께 시작했으므로 그저께부터 오늘까지 사흘. 진도는 오늘 읽는 계획의 것
+  let s = statusFor(m);
+  assert.deepEqual(Object.keys(s.days), [toISO(START), toISO(addDays(START, 1)), toISO(today())]);
+  assert.equal(s.days[toISO(START)], 100);
+  assert.equal(s.progress, memberStatus(1, START, END).progress);
+  // 계획이 끝나고 20일 뒤: 14일 안에 분량이 있는 날이 없고 오늘 계획도 없다
+  s = statusFor(m, addDays(END, 20));
+  assert.deepEqual(s, { days: {}, progress: null });
+  // 같은 계획 방은 지금처럼 방의 기간으로
+  await saveRoomMembership({ accountId: 1, code: 'SAME-ROOM-CODE', memberId: 'N', memberKey: 'K', name: '같이', memberName: '나', start: START, end: END });
+  const same = roomMemberships().find((x) => x.code === 'SAME-ROOM-CODE');
+  assert.equal(same.kind, 'same');
+  assert.equal(Object.keys(statusFor(same).days).length, 10);
 });
 
 // ── 서버와 주고받기 ────────────────────────────────────────
@@ -373,4 +405,59 @@ t('장 중간에서도 나누기만 다른 계획은 같은 계획으로 보지 
   await lukePlan();
   assert.equal(await joinRoom(found, '이웃'), 'saved');
   assert.equal(planOn(today()).splitChapters, false);
+});
+
+t('각자 계획 방: 들어와도 계획은 그대로이고, 서로 그날 읽은 퍼센트와 진도만 본다. 같은 계획 방과도 함께 들어간다', async (ctx) => {
+  if (skip) return ctx.skip(skip);
+  const a = device();
+  const lukeId = await lukePlan();
+  await setRead(lukeId, 3, true); // 오늘 분량
+  const code = await createRoom(null, { name: '각자 읽기', memberName: '김집사' });
+  assert.deepEqual(roomMemberships().map((m) => [m.kind, m.end]), [['own', null]]);
+
+  // 다른 기간·다른 본문의 계획을 읽는 사람. 같은 계획 방에도 들어가 있다
+  const sameRoom = await openRoom({ name: '사랑구역' });
+  const b = device();
+  await joinRoom(await lookupRoom(sameRoom.code), '엄마');
+  const psalms = await savePlan({
+    start: addDays(END, 1),
+    end: addDays(END, 5),
+    title: '시편',
+    selection: { psa: [1, 2, 3, 4, 5] },
+    splitChapters: true,
+    mode: 'sequential',
+    tracks: [{ title: '시편', days: buildPlan(getIndex(), selectionToChapters({ psa: [1, 2, 3, 4, 5] }), 5) }],
+  });
+  const found = await lookupRoom(code);
+  assert.deepEqual(found.plan, { kind: 'own' });
+  assert.equal(joinProblem(found), null, '같은 계획 방과 부딪히지 않는다');
+  assert.equal(await joinRoom(found, '엄마'), 'own');
+  assert.deepEqual(listPlans().map((p) => p.title).sort(), ['시편', '누가복음'].sort(), '계획을 만들거나 바꾸지 않는다');
+  assert.ok(getPlan(psalms));
+  assert.deepEqual(roomMemberships().map((m) => [m.name, m.kind]).sort(), [['각자 읽기', 'own'], ['사랑구역', 'same']]);
+
+  // 오늘 계획이 없는 사람
+  const c = device();
+  await joinRoom(await lookupRoom(code), '이웃');
+
+  b.use();
+  await setRead(planOn(today()).id, 3, true);
+  await uploadRooms();
+  c.use();
+  await uploadRooms();
+
+  a.use();
+  await refreshRooms();
+  const [m] = roomMemberships();
+  const members = roomMembers(m, roomData(code).room);
+  assert.deepEqual(
+    members.map((x) => [x.name, x.pct, x.progress == null]),
+    [
+      ['김집사', 100, false],
+      ['엄마', 100, false],
+      ['이웃', null, true],
+    ],
+  );
+  assert.deepEqual(roomTally(members), { reading: 2, read: 2 }, '오늘 분량이 없는 사람은 세지 않는다');
+  assert.deepEqual(Object.keys(roomData(code).room.members[1].days).length, 3, '엄마는 그저께부터 사흘');
 });

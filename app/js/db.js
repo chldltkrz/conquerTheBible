@@ -295,6 +295,12 @@ export const MIGRATIONS = [
   // v9: 새번역 에스겔서 15:8을 바로잡았다(사이트에 8절 번호가 빠져 7절에 붙어 있었다). 그전에 만든 계획은
   //     15장 끝까지 읽는 구간을 "7절까지"로 적었으므로 8절까지로 고친다. 동기화 중이면 트리거가 다른 기기에도 보낸다.
   extendChapterEnd('ezk', 15, 7),
+  // v10: 각자 계획으로 읽는 함께 읽기 방. 'same'은 방의 계획을 함께 읽는 방, 'own'은 각자 자기 계획으로 읽고
+  //      날짜별 읽음과 진도만 나누는 방이다. 'own'은 기간이 없어 end_date를 start_date와 같게 둔다
+  //      (이 열을 모르는 예전 앱은 끝난 방으로 본다).
+  `
+  ALTER TABLE room_memberships ADD COLUMN kind TEXT NOT NULL DEFAULT 'same';
+  `,
 ];
 
 /**
@@ -1209,6 +1215,7 @@ export const saveYearVerse = (value) => setSetting(yearVerseKey(accountId), valu
 // ── 함께 읽기 방 ───────────────────────────────────────────
 // 서버와 주고받는 것은 rooms.js. 여기서는 이 기기에 둔 방 목록만 다룬다.
 
+/** kind: 'same'(방의 계획을 함께 읽는 방) | 'own'(각자 계획으로 읽는 방. 기간이 없어 end가 null) */
 const membershipFromRow = (r) => ({
   accountId: r.account_id,
   code: r.code,
@@ -1216,12 +1223,13 @@ const membershipFromRow = (r) => ({
   memberKey: r.member_key,
   name: r.name,
   memberName: r.member_name,
+  kind: r.kind === 'own' ? 'own' : 'same',
   start: fromISO(r.start_date),
-  end: fromISO(r.end_date),
+  end: r.kind === 'own' ? null : fromISO(r.end_date),
   joinedAt: r.joined_at,
 });
 
-/** 들어간 방들 (계획이 일찍 시작하는 방부터). account를 주지 않으면 모든 계정 */
+/** 들어간 방들 (계획이 일찍 시작하는 방부터, 각자 계획 방은 들어간 날로). account를 주지 않으면 모든 계정 */
 export function roomMemberships(account = null) {
   return all(
     `SELECT * FROM room_memberships ${account == null ? '' : 'WHERE account_id = $a'} ORDER BY start_date, joined_at, code`,
@@ -1229,14 +1237,15 @@ export function roomMemberships(account = null) {
   ).map(membershipFromRow);
 }
 
-/** 방에 들어간 것을 기록한다 (같은 계정·같은 방이면 덮어쓴다) */
-export function saveRoomMembership({ accountId: account, code, memberId, memberKey, name, memberName, start, end }) {
+/** 방에 들어간 것을 기록한다 (같은 계정·같은 방이면 덮어쓴다). 각자 계획 방(kind 'own')은 end 없이 start만 */
+export function saveRoomMembership({ accountId: account, code, memberId, memberKey, name, memberName, kind = 'same', start, end }) {
   return write(() =>
     db.run(
-      `INSERT INTO room_memberships (account_id, code, member_id, member_key, name, member_name, start_date, end_date, joined_at)
-       VALUES ($a, $code, $id, $key, $name, $mname, $s, $e, $now)
+      `INSERT INTO room_memberships (account_id, code, member_id, member_key, name, member_name, kind, start_date, end_date, joined_at)
+       VALUES ($a, $code, $id, $key, $name, $mname, $kind, $s, $e, $now)
        ON CONFLICT (account_id, code) DO UPDATE SET member_id = excluded.member_id, member_key = excluded.member_key,
-         name = excluded.name, member_name = excluded.member_name, start_date = excluded.start_date, end_date = excluded.end_date`,
+         name = excluded.name, member_name = excluded.member_name, kind = excluded.kind,
+         start_date = excluded.start_date, end_date = excluded.end_date`,
       {
         $a: account,
         $code: code,
@@ -1244,8 +1253,9 @@ export function saveRoomMembership({ accountId: account, code, memberId, memberK
         $key: memberKey,
         $name: name,
         $mname: memberName,
+        $kind: kind,
         $s: toISO(start),
-        $e: toISO(end),
+        $e: toISO(kind === 'own' ? start : end),
         $now: localTimestamp(),
       },
     ),
