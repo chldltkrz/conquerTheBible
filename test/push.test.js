@@ -75,7 +75,7 @@ const sentTo = (name) => sent.filter((s) => s.endpoint === endpoint(name));
 
 test('VAPID 공개 키', async (ctx) => {
   if (skip) return ctx.skip(skip);
-  assert.deepEqual(await api('GET', '/api/push/key'), { status: 200, body: { key: 'BTestPublicKey' } });
+  assert.deepEqual(await api('GET', '/api/push/key'), { status: 200, body: { key: 'BTestPublicKey', merge: true } });
 });
 
 test('푸시 서비스가 아닌 주소, 틀린 시각·시간대·날짜는 받지 않는다', async (ctx) => {
@@ -177,6 +177,52 @@ test('시험 알림: 바로 보내고, 잇달아 누르면 잠시 막는다', as
   assert.equal(sentTo('test')[0].payload.tag, 'reminder-test');
   assert.equal((await api('POST', '/api/push/test', { endpoint: endpoint('test') })).body.error, 'busy');
   assert.equal((await api('POST', '/api/push/test', { endpoint: endpoint('nobody') })).body.error, 'no_subscription');
+});
+
+test('데이터베이스가 한도를 넘으면 새 구독은 받지 않고, 있던 구독은 내용을 바꾼다', async (ctx) => {
+  if (skip) return ctx.skip(skip);
+  const { startServer } = await import('../server/sync-server.mjs');
+  const full = await startServer({
+    databaseUrl: process.env.TEST_DATABASE_URL,
+    port: 0,
+    limits: { maxDbBytes: 1 },
+    push: { publicKey: 'BTestPublicKey', sender: async () => {}, interval: 0 },
+  });
+  try {
+    assert.equal((await put('before-full')).status, 204);
+    const putTo = (name, days = {}) =>
+      fetch(`${full.url}/api/push/subscription`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription: subscription(name), time: '21:00', tz: TZ, days }),
+      }).then(async (res) => ({ status: res.status, body: res.status === 204 ? null : await res.json() }));
+    const fresh = await putTo('while-full');
+    assert.equal(fresh.status, 507);
+    assert.equal(fresh.body.error, 'server_full');
+    assert.equal(await row('while-full'), undefined);
+    const days = { '2026-10-17': { text: '창세기 1장 · 약 4분', done: true } };
+    assert.equal((await putTo('before-full', days)).status, 204);
+    assert.deepEqual((await row('before-full')).days, days);
+  } finally {
+    await full.close();
+  }
+});
+
+test('merge로 올리면 보낸 날만 덮어쓰고 나머지 날은 그대로 둔다 (앱을 떠날 때 오늘·내일만 올린다)', async (ctx) => {
+  if (skip) return ctx.skip(skip);
+  const days = {
+    '2026-10-17': { text: '창세기 1장 · 약 4분', done: false },
+    '2026-10-18': { text: '창세기 2장 · 약 4분', done: false },
+    '2026-10-19': { text: '창세기 3장 · 약 4분', done: false },
+  };
+  assert.equal((await put('merge', { days })).status, 204);
+  const soon = { '2026-10-17': { text: '창세기 1장 · 약 4분', done: true } };
+  const res = await api('PUT', '/api/push/subscription', { subscription: subscription('merge'), time: '21:00', tz: TZ, days: soon, merge: true });
+  assert.equal(res.status, 204);
+  assert.deepEqual((await row('merge')).days, { ...days, ...soon });
+  // merge가 아니면 통째로 바꾼다
+  assert.equal((await put('merge', { days: soon })).status, 204);
+  assert.deepEqual((await row('merge')).days, soon);
 });
 
 test('구독 바꾸기와 지우기', async (ctx) => {

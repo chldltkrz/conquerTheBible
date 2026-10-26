@@ -24,6 +24,7 @@ import {
   isPaused,
   listAccounts,
   MAX_PLAN_DAYS,
+  onRoomsDropped,
   onWrite,
   planOn,
   planTrackDays,
@@ -35,6 +36,7 @@ import {
 import { buildPlan } from './planner.js';
 import { planInBackground } from './plancalc.js';
 import { normalizeCode } from './sync.js';
+import { fetchLeaving } from './net.js';
 import { OLD_DEFAULT_NAME } from './names.js';
 import { progressOf, readPercent, replaceSummary } from './views/common.js';
 
@@ -110,7 +112,8 @@ async function request(method, path, { code = null, member = null, body } = {}) 
   const text = body ? JSON.stringify(body) : undefined;
   let res;
   try {
-    res = await fetchImpl(`${baseUrl}${path}`, {
+    // 앱을 떠나는 중이면 페이지가 닫혀도 요청을 끝까지 보낸다 (net.js)
+    res = await fetchLeaving(fetchImpl, `${baseUrl}${path}`, {
       method,
       headers: {
         ...(text ? { 'Content-Type': 'application/json' } : {}),
@@ -119,8 +122,6 @@ async function request(method, path, { code = null, member = null, body } = {}) 
       },
       body: text,
       cache: 'no-store',
-      // 앱을 떠나는 중이면 페이지가 닫혀도 요청을 끝까지 보낸다
-      keepalive: hasWindow && document.visibilityState === 'hidden' && (text?.length ?? 0) < 60000,
     });
   } catch {
     throw new RoomError('offline');
@@ -582,6 +583,15 @@ export async function leaveAccountRooms(accountId) {
     roomMemberships(accountId).map((m) => request('DELETE', '/members/me', { code: m.code, member: m })),
   );
 }
+
+// 동기화로 받은 기록이나 기록을 통째로 바꿔서(동기화 연결, 백업 가져오기) 이 기기에서 빠진 방은 서버에서도 나온다.
+// 그러지 않으면 방에 "아직 안 올림"인 멤버로 남아 자리(30명)를 차지한다. 다른 기기에서 이미 나왔으면 아무 일도 없다.
+onRoomsDropped((list) => {
+  for (const m of list) {
+    if (!roomMemberships().some((x) => x.code === m.code)) cache.delete(m.code);
+    request('DELETE', '/members/me', { code: m.code, member: m }).catch(() => {});
+  }
+});
 
 /** 방장이 멤버를 내보낸다 */
 export async function removeRoomMember(m, memberId) {

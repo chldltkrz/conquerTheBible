@@ -4,10 +4,11 @@
 // 계산해 days로 올려 두고, 기록이 바뀔 때마다 다시 올린다. 서버는 알림 시각에 그날 줄만 본다.
 // 동기화 중인 기기는 같은 동기화 공간의 다른 기기가 그날 다 읽었다고 올렸어도 보내지 않는다.
 //
-//   GET    /api/push/key            VAPID 공개 키 → {key}
+//   GET    /api/push/key            VAPID 공개 키 → {key, merge: true} (merge: 아래 merge를 안다)
 //   PUT    /api/push/subscription   {subscription, time: "21:00", tz: "Asia/Seoul",
-//                                    days: {"2026-10-17": {text: "창세기 1–3장 · 약 12분", done: false}}}
+//                                    days: {"2026-10-17": {text: "창세기 1–3장 · 약 12분", done: false}}, merge?}
 //                                   (동기화 중이면 Authorization: Bearer <동기화 코드>로 같은 공간의 기기와 묶는다)
+//                                   merge면 days를 바꾸지 않고 보낸 날만 덮어쓴다 (앱을 떠날 때 오늘·내일만 보낸다)
 //   DELETE /api/push/subscription   {endpoint}
 //   POST   /api/push/test           {endpoint} 지금 시험 알림을 보낸다
 //   POST   /api/push/renew          {old, subscription} 브라우저가 구독을 바꿨을 때 (서비스 워커가 보낸다)
@@ -197,15 +198,20 @@ export function createReminders(pool, sender) {
 
 /**
  * /api/push/… 요청 처리기 → (route, req) => [status, body]
- * spaceIdFor(req): 요청의 동기화 코드에 맞는 공간 번호(없으면 null), deliver: createReminders()의 deliver
+ * spaceIdFor(req): 요청의 동기화 코드에 맞는 공간 번호(없으면 null), deliver: createReminders()의 deliver,
+ * ensureStorage(): 데이터베이스가 한도를 넘었으면 던진다 (새 구독을 받기 전에 부른다)
  */
-export function createPushApi(pool, { publicKey, spaceIdFor, deliver }) {
+export function createPushApi(pool, { publicKey, spaceIdFor, deliver, ensureStorage = async () => {} }) {
   async function subscribe(req) {
     const body = await readJson(req, MAX_BODY);
     const sub = parseSubscription(body.subscription);
     if (typeof body.time !== 'string' || !TIME_RE.test(body.time)) throw new HttpError(400, 'bad_time');
     if (typeof body.tz !== 'string' || !TZ_RE.test(body.tz)) throw new HttpError(400, 'bad_tz');
     const days = parseDays(body.days);
+    // 새 구독만 데이터베이스 한도를 본다 (구독 주소는 아무나 지어 보낼 수 있다). 있던 구독은 내용을 바꿀 뿐 늘지 않는다
+    if (!(await pool.query('SELECT 1 FROM push_subscriptions WHERE endpoint = $1', [sub.endpoint])).rowCount) {
+      await ensureStorage();
+    }
     const spaceId = await spaceIdFor(req);
     try {
       await pool.query(
@@ -213,12 +219,12 @@ export function createPushApi(pool, { publicKey, spaceIdFor, deliver }) {
          VALUES ($1, $2, $3, $4::time, $5::text, $6, $7::jsonb, ${nextAt('$4::time', '$5::text')})
          ON CONFLICT (endpoint) DO UPDATE SET
            p256dh = excluded.p256dh, auth = excluded.auth, space_id = excluded.space_id,
-           days = excluded.days, updated_at = now(),
+           days = CASE WHEN $8 THEN push_subscriptions.days || excluded.days ELSE excluded.days END, updated_at = now(),
            -- 시각이나 시간대를 바꿨을 때만 다음 알림 시각을 다시 정한다 (오늘 보낸 알림을 또 보내지 않도록)
            next_at = CASE WHEN push_subscriptions.remind_at = excluded.remind_at AND push_subscriptions.tz = excluded.tz
                           THEN push_subscriptions.next_at ELSE excluded.next_at END,
            remind_at = excluded.remind_at, tz = excluded.tz`,
-        [sub.endpoint, sub.p256dh, sub.auth, body.time, body.tz, spaceId, JSON.stringify(days)],
+        [sub.endpoint, sub.p256dh, sub.auth, body.time, body.tz, spaceId, JSON.stringify(days), body.merge === true],
       );
     } catch (err) {
       if (err.code === '22023') throw new HttpError(400, 'bad_tz'); // 모르는 시간대
@@ -283,7 +289,7 @@ export function createPushApi(pool, { publicKey, spaceIdFor, deliver }) {
   return async function push(route, req) {
     switch (route) {
       case 'GET /api/push/key':
-        return [200, { key: publicKey }];
+        return [200, { key: publicKey, merge: true }];
       case 'PUT /api/push/subscription':
         return subscribe(req);
       case 'DELETE /api/push/subscription':

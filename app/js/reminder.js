@@ -7,6 +7,7 @@
 import { formatSegments, readingMinutes } from './bible.js';
 import { addDays, compareDate, daysBetween, toISO, today } from './dates.js';
 import { getSetting, listAccounts, onWrite, planOn, setSetting, syncInfo } from './db.js';
+import { fetchLeaving, leaving } from './net.js';
 
 export const DEFAULT_TIME = '21:00';
 const DAYS_AHEAD = 365;
@@ -74,6 +75,7 @@ const MESSAGES = {
   push_off: '알림 서버가 아직 준비되지 않았습니다. 잠시 뒤에 다시 해 주세요.',
   busy: '잠시 뒤에 다시 해 주세요.',
   gone: '이 기기의 알림 구독이 없어졌습니다. 알림을 껐다가 다시 켜 주세요.',
+  server_full: '서버의 저장 공간이 부족해 지금은 알림을 켤 수 없습니다.',
 };
 
 export class ReminderError extends Error {
@@ -96,7 +98,8 @@ async function request(method, path, body, code = null) {
   const text = body ? JSON.stringify(body) : undefined;
   let res;
   try {
-    res = await fetchImpl(`${baseUrl}${path}`, {
+    // 앱을 떠나는 중이면 페이지가 닫혀도 끝까지 보낸다 (net.js)
+    res = await fetchLeaving(fetchImpl, `${baseUrl}${path}`, {
       method,
       headers: {
         ...(text ? { 'Content-Type': 'application/json' } : {}),
@@ -104,8 +107,6 @@ async function request(method, path, body, code = null) {
       },
       body: text,
       cache: 'no-store',
-      // 앱을 떠나는 중이면 페이지가 닫혀도 끝까지 보낸다 (브라우저 한도 64KB)
-      keepalive: hasWindow && document.visibilityState === 'hidden' && (text?.length ?? 0) < 60000,
     });
   } catch {
     throw new ReminderError('offline');
@@ -142,11 +143,16 @@ function base64urlBytes(s) {
 }
 
 let serverKey = null; // 서버의 VAPID 공개 키 (앱을 연 동안 한 번만 받는다)
+let serverMerges = false; // 서버가 days를 합치는 올리기(merge)를 아는지 (예전 서버는 모른다)
 
 /** 이 기기의 푸시 구독. 없으면 만든다 (서버의 VAPID 키가 바뀌었으면 새로 만든다) */
 async function subscription() {
   const reg = await navigator.serviceWorker.ready;
-  serverKey ??= base64urlBytes((await request('GET', '/key')).key);
+  if (!serverKey) {
+    const res = await request('GET', '/key');
+    serverKey = base64urlBytes(res.key);
+    serverMerges = res.merge === true;
+  }
   const applicationServerKey = serverKey;
   let sub = await reg.pushManager.getSubscription();
   const sameKey = (s) => {
@@ -161,6 +167,7 @@ async function subscription() {
 }
 
 let lastSent = null; // 마지막으로 올린 내용 (같으면 다시 올리지 않는다)
+const SOON_DAYS = 2; // 앱을 떠날 때는 오늘·내일만 올린다
 
 async function upload(sub, time, { force = false } = {}) {
   const body = {
@@ -172,6 +179,12 @@ async function upload(sub, time, { force = false } = {}) {
   const code = syncInfo()?.code ?? null;
   const signature = JSON.stringify([body, code]);
   if (!force && signature === lastSent) return;
+  if (leaving() && serverMerges) {
+    // 1년치는 앱을 떠날 때 보낼 수 있는 크기(net.js)를 넘을 수 있다. 방금 읽음 표시한 것이 오늘 알림에 들도록
+    // 오늘·내일만 서버에 있던 것과 합쳐 올리고, 나머지는 다음에 앱을 열 때 모두 올린다.
+    await request('PUT', '/subscription', { ...body, days: reminderDays(today(), SOON_DAYS), merge: true }, code);
+    return;
+  }
   await request('PUT', '/subscription', body, code);
   lastSent = signature;
 }

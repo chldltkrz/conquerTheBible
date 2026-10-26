@@ -5,6 +5,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import crypto from 'node:crypto';
 import {
   createAccount,
   currentAccount,
@@ -19,16 +20,21 @@ import {
   listPlans,
   listSavedVerses,
   newId,
+  onRoomsDropped,
   planOn,
+  renameAccount,
   resetAll,
+  roomMemberships,
   saveDayNote,
   savePlan,
   saveReadingProgress,
+  saveRoomMembership,
   saveVerses,
   saveYearVerse,
   setRead,
   setSetting,
   switchAccount,
+  SYNC_TABLES,
   syncApply,
   syncCollect,
   syncInfo,
@@ -170,6 +176,99 @@ test('백업 파일에는 동기화 코드와 보내지 않은 변경이 들어�
   assert.deepEqual(rows(backup, 'SELECT COUNT(*) FROM sync_state'), [[0]]);
   assert.deepEqual(rows(backup, 'SELECT COUNT(*) FROM sync_outbox'), [[0]]);
   assert.equal(syncInfo().code, 'ABCD-EFGH-JKMN', '이 기기는 계속 동기화한다');
+});
+
+/** 동기화를 시작하고 보낼 것을 모두 보낸 것으로 한다 (서버가 모든 표를 받는다고 알린다) */
+async function synced() {
+  await syncStart('ABCD-EFGH-JKMN');
+  await syncApply({ upTo: syncCollect().upTo, rows: [], cursor: 1, replaced: true, tables: SYNC_TABLES.map((t) => t.name) });
+}
+
+const syncRow = (t, k, d) => ({ t, k: JSON.stringify(k), d });
+
+test('나눠 받을 때 부모 줄(계정)이 다음 묶음에 오면 자식 줄(계획)을 미뤄 두었다가 함께 넣고, 다 받았는데도 없으면 버린다', async () => {
+  const d = device();
+  await synced();
+  const mom = newId();
+  const plan = newId();
+  const planRow = (title) =>
+    syncRow('plans', [plan], {
+      id: plan,
+      account_id: mom,
+      start_date: '2026-10-01',
+      end_date: '2026-10-01',
+      title,
+      mode: 'sequential',
+      selection: '{"mrk":[1]}',
+      split_chapters: 1,
+      total_chars: 10,
+      created_at: '2026-10-01 08:00:00',
+    });
+  const page1 = [
+    planRow('엄마 계획'),
+    syncRow('plan_tracks', [plan, 0], { plan_id: plan, track: 0, title: '엄마 계획', total_chars: 10 }),
+    syncRow('plan_days', [plan, 0, 1], { plan_id: plan, track: 0, day: 1, segments: '[{"b":"mrk","c":1}]', chars: 10, moved: 0 }),
+  ];
+  await syncApply({ rows: page1, cursor: 4, more: true });
+  assert.equal(rows(d.db, 'SELECT COUNT(*) FROM plans')[0][0], 0, '계정이 아직 없다');
+
+  // 다음 묶음: 계정과, 그사이 고친 계획 (새로 온 줄이 미뤄 둔 줄보다 앞선다)
+  const account = syncRow('accounts', [mom], { id: mom, name: '어머니', color: '#3b64b0', created_at: '2026-10-01 08:00:00' });
+  await syncApply({ rows: [account, planRow('엄마 계획 (고침)')], cursor: 6, more: false });
+  await switchAccount(mom);
+  assert.deepEqual(
+    listPlans().map((p) => p.title),
+    ['엄마 계획 (고침)'],
+  );
+  assert.equal(planOn(oct1).days[0].segments[0].b, 'mrk');
+  assert.equal(rows(d.db, "SELECT COUNT(*) FROM sync_state WHERE key = 'deferred'")[0][0], 0);
+
+  // 다 받았는데도 부모가 없으면 버린다 (다른 기기에서 지운 계정)
+  const lone = syncRow('plans', [newId()], { ...planRow('').d, id: newId(), account_id: newId() });
+  lone.k = JSON.stringify([lone.d.id]);
+  await syncApply({ rows: [lone], cursor: 7, more: false });
+  assert.equal(rows(d.db, `SELECT COUNT(*) FROM plans WHERE id = ${lone.d.id}`)[0][0], 0);
+  assert.equal(rows(d.db, "SELECT COUNT(*) FROM sync_state WHERE key = 'deferred'")[0][0], 0);
+});
+
+test('받은 기록이나 기록을 통째로 바꿔 빠진 함께 읽기 방을 알린다 (나눠 받는 사이 다시 오면 알리지 않는다)', async () => {
+  const dropped = [];
+  onRoomsDropped((list) => dropped.push(...list.map((m) => `${m.code} ${m.memberId}`)));
+  device();
+  await synced();
+  const backup = exportBackup(); // 방에 들어가기 전
+  await saveRoomMembership({
+    accountId: currentAccount().id,
+    code: 'ABCD-EFGH-JKMN',
+    memberId: 'M000000001',
+    memberKey: 'K'.repeat(26),
+    name: '방',
+    memberName: '나',
+    kind: 'own',
+    start: oct1,
+  });
+  const { upTo, changes } = syncCollect();
+  await syncApply({ upTo, rows: [], cursor: 2, tables: SYNC_TABLES.map((t) => t.name) });
+  const row = changes.find((c) => c.t === 'room_memberships');
+  const gone = { ...row, d: null };
+
+  // 나눠 받는 중에 지운 줄이 먼저 오고 같은 멤버가 다음 묶음에 다시 오면 (다른 기기가 기록을 통째로 바꿨을 때) 그대로
+  await syncApply({ rows: [gone], cursor: 3, more: true });
+  assert.equal(roomMemberships().length, 0);
+  await syncApply({ rows: [row], cursor: 4, more: false });
+  assert.equal(roomMemberships().length, 1);
+  assert.deepEqual(dropped, []);
+
+  // 다 받은 뒤에도 빠졌으면 알린다
+  await syncApply({ rows: [gone], cursor: 5, more: false });
+  assert.deepEqual(dropped, ['ABCD-EFGH-JKMN M000000001']);
+
+  // 백업을 가져와 빠져도
+  dropped.length = 0;
+  await syncApply({ rows: [row], cursor: 6, more: false });
+  await importFile(backup);
+  assert.equal(roomMemberships().length, 0);
+  assert.deepEqual(dropped, ['ABCD-EFGH-JKMN M000000001']);
 });
 
 // ── 서버와 주고받기 ────────────────────────────────────────
@@ -491,6 +590,66 @@ t('모든 기기에서 끄면 서버 기록이 지워지고, 다른 기기도 �
   assert.equal(syncInfo(), null);
   assert.equal(syncState().status, 'off');
   assert.equal(listPlans().length, 1);
+});
+
+t('서버가 오래된 지운 줄을 정리하면, 그보다 오래 오지 않은 기기는 모두 다시 받아 맞추고 보내지 않은 변경은 이어서 보낸다', async (ctx) => {
+  if (skip) return ctx.skip(skip);
+  const a = device();
+  const id = await savePlan(markPlan('지울 계획'));
+  const b = device();
+  const code = await pair(a, b);
+  b.use();
+  assert.equal(listPlans().length, 1);
+  await saveDayNote(oct1, '마가복음 1장', 'b의 메모'); // 아직 보내지 않았다
+
+  a.use();
+  await deletePlan(id);
+  await sync(a);
+  // 지운 줄이 90일 지난 것으로 하고 다음 요청에서 정리하게 한다
+  const hash = crypto.createHash('sha256').update(code.replace(/-/g, '')).digest();
+  const space = (await server.pool.query('SELECT id FROM sync_spaces WHERE code_hash = $1', [hash])).rows[0].id;
+  await server.pool.query(`UPDATE sync_rows SET changed_at = now() - interval '91 days' WHERE space_id = $1 AND data IS NULL`, [space]);
+  await server.pool.query('UPDATE sync_spaces SET pruned_at = NULL WHERE id = $1', [space]);
+  await sync(a); // 정리한다. a는 다 받았으므로 그대로 이어진다
+  const left = await server.pool.query('SELECT count(*)::int AS n FROM sync_rows WHERE space_id = $1 AND data IS NULL', [space]);
+  assert.equal(left.rows[0].n, 0);
+
+  await sync(b); // 지운 계획을 알 수 없다 → 모두 다시 받아 맞춘다
+  assert.equal(listPlans().length, 0, '서버에 없는 계획은 지운다');
+  assert.equal(getDayNote(oct1).text, 'b의 메모', '보내지 않은 변경은 남는다');
+  assert.equal(syncInfo().pending, 0, '이어서 보냈다');
+  await sync(a);
+  assert.equal(getDayNote(oct1).text, 'b의 메모');
+});
+
+t('부모 줄(계정)을 자식 줄(계획)보다 나중에 고쳐도, 나눠 받는 기기에 계획이 빠지지 않는다', async (ctx) => {
+  if (skip) return ctx.skip(skip);
+  const { startServer } = await import('../server/sync-server.mjs');
+  const small = await startServer({ databaseUrl: process.env.TEST_DATABASE_URL, port: 0, limits: { pageRows: 2 } });
+  configureSync({ url: `${small.url}/api/sync` });
+  try {
+    const a = device();
+    const b = device();
+    await pair(a, b);
+    a.use();
+    const mom = await createAccount('엄마');
+    await switchAccount(mom);
+    await savePlan(markPlan('엄마 계획'));
+    await sync(a);
+    await renameAccount(mom, '어머니'); // 계정 줄이 서버에서 가장 뒤 번호가 된다
+    await sync(a);
+
+    await sync(b); // 두 줄씩 받는다: 계획이 계정보다 먼저 온다
+    await switchAccount(accountByName('어머니'));
+    assert.deepEqual(
+      listPlans().map((p) => p.title),
+      ['엄마 계획'],
+    );
+    assert.equal(planOn(oct1).days.length, 3);
+  } finally {
+    configureSync({ url: `${server.url}/api/sync` });
+    await small.close();
+  }
 });
 
 t('기록이 많으면 나누어 보내고 나누어 받는다', async (ctx) => {

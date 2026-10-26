@@ -14,16 +14,17 @@ import {
   syncApply,
   syncCollect,
   syncInfo,
+  syncReconcile,
   syncResetCursor,
   syncStart,
   syncStop,
 } from './db.js';
+import { fetchLeaving } from './net.js';
 
 const PROTOCOL = 1;
 const PUSH_DELAY = 1500; // 기록을 바꾸고 보내기까지 (이어서 누르는 것을 한 번에 보낸다)
 const POLL_INTERVAL = 60 * 1000;
 const MAX_CHARS = 500000; // 요청 하나에 담는 변경의 대략적인 글자 수 (서버 한도 4MB 안)
-const KEEPALIVE_LIMIT = 60000; // 앱을 떠날 때 보내는 요청의 최대 크기 (브라우저 한도 64KB)
 
 const hasWindow = typeof window !== 'undefined';
 
@@ -92,7 +93,8 @@ async function request(method, path, code, body) {
   const text = body ? JSON.stringify(body) : undefined;
   let res;
   try {
-    res = await fetchImpl(`${baseUrl}${path}`, {
+    // 앱을 떠나는 중이면 페이지가 닫혀도 요청을 끝까지 보낸다 (net.js)
+    res = await fetchLeaving(fetchImpl, `${baseUrl}${path}`, {
       method,
       headers: {
         ...(text ? { 'Content-Type': 'application/json' } : {}),
@@ -100,8 +102,6 @@ async function request(method, path, code, body) {
       },
       body: text,
       cache: 'no-store',
-      // 앱을 떠나는 중이면 페이지가 닫혀도 요청을 끝까지 보낸다
-      keepalive: hasWindow && document.visibilityState === 'hidden' && (text?.length ?? 0) < KEEPALIVE_LIMIT,
     });
   } catch {
     throw new SyncError('offline');
@@ -193,16 +193,42 @@ async function exchange() {
       });
     } catch (err) {
       if (stale()) return;
+      if (err.code === 'cursor_stale') {
+        await resync(info);
+        continue;
+      }
       if (err.code !== 'cursor_ahead') throw err;
       await syncResetCursor();
       continue;
     }
     if (stale()) return;
-    if (await syncApply({ upTo, rows: res.rows, cursor: res.cursor, replaced: info.replace, tables: res.tables })) {
+    if (await syncApply({ upTo, rows: res.rows, cursor: res.cursor, replaced: info.replace, tables: res.tables, more: res.more })) {
       notify('sync-applied');
     }
     if (!more && !res.more && !syncInfo()?.pending) return;
   }
+}
+
+/** 서버의 모든 줄을 cursor 0부터 받는다 → {rows, cursor}. full: 정리한 지운 줄이 있어도 받는다 */
+async function fetchAll(code) {
+  const rows = [];
+  let cursor = 0;
+  for (;;) {
+    const res = await request('POST', '', code, { v: PROTOCOL, cursor, full: true, changes: [] });
+    for (const r of res.rows) rows.push(r);
+    cursor = res.cursor;
+    if (!res.more) return { rows, cursor };
+  }
+}
+
+/**
+ * 오래 동기화하지 않아 서버가 그사이 지운 줄의 기록을 정리했을 때(cursor_stale): 모두 다시 받아 맞춘다.
+ * 서버에 없는 줄은 지우고, 아직 보내지 않은 이 기기 변경은 남겨 이어서 보낸다.
+ */
+async function resync(info) {
+  const all = await fetchAll(info.code);
+  if (isPaused() || syncInfo()?.epoch !== info.epoch) return; // 기다리는 사이 다시 시작했거나 다른 창에 넘겼다
+  if (await syncReconcile(all)) notify('sync-applied');
 }
 
 async function handleError(err) {
@@ -276,14 +302,7 @@ export async function joinSync(code, keep) {
     return;
   }
   // 모두 받은 뒤에 한 번에 바꾼다 (받는 중에 끊겨도 이 기기 기록은 그대로)
-  const rows = [];
-  let cursor = 0;
-  for (;;) {
-    const res = await request('POST', '', code, { v: PROTOCOL, cursor, changes: [] });
-    for (const r of res.rows) rows.push(r);
-    cursor = res.cursor;
-    if (!res.more) break;
-  }
+  const { rows, cursor } = await fetchAll(code);
   await syncAdopt({ code, rows, cursor });
   setStatus('ok');
   notify('sync-applied');

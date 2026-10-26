@@ -1290,6 +1290,44 @@ export function deleteRoomMembership(account, code) {
   return write(() => db.run('DELETE FROM room_memberships WHERE account_id = $a AND code = $c', { $a: account, $c: code }));
 }
 
+// 동기화로 받은 기록이나 기록을 통째로 바꿔서(동기화 연결, 백업 가져오기, 모두 지우기) 이 기기에서 빠진 방.
+// 서버에는 멤버가 남아 있으므로 rooms.js가 방에서 나온다 (다른 기기에서 이미 나왔으면 아무 일도 없다).
+
+const roomDropListeners = new Set();
+
+/** 빠진 방이 있으면 fn([{code, memberId, memberKey}])을 부른다 */
+export function onRoomsDropped(fn) {
+  roomDropListeners.add(fn);
+}
+
+/** 들어가 있는 방의 멤버들 (빠진 방을 알아내려고 바꾸기 전후를 견준다) */
+const memberRows = () =>
+  all('SELECT code, member_id, member_key FROM room_memberships').map((r) => ({
+    code: r.code,
+    memberId: r.member_id,
+    memberKey: r.member_key,
+  }));
+
+const memberKey = (m) => `${m.code} ${m.memberId}`;
+let droppedRooms = new Map(); // 받는 중에 빠진 방. 나눠 받으면 지운 줄이 먼저 오고 같은 멤버가 다음 묶음에 다시 올 수 있다
+
+/** before(바꾸기 전 memberRows)에서 빠진 방을 모아 두고, settled(다 받음)면 그때도 없는 방을 알린다 */
+function noteDroppedRooms(before, { settled = true } = {}) {
+  const now = new Set(memberRows().map(memberKey));
+  for (const m of before) if (!now.has(memberKey(m))) droppedRooms.set(memberKey(m), m);
+  if (!settled) return;
+  const gone = [...droppedRooms.values()].filter((m) => !now.has(memberKey(m)));
+  droppedRooms = new Map();
+  if (!gone.length) return;
+  for (const fn of roomDropListeners) {
+    try {
+      fn(gone);
+    } catch (err) {
+      console.warn(err);
+    }
+  }
+}
+
 // ── 백업 ───────────────────────────────────────────────────
 
 /** 백업 파일 바이트. 동기화 코드와 아직 보내지 않은 변경은 빼고 담는다(파일을 건네받은 사람이 동기화에 들어오지 못하게). */
@@ -1354,12 +1392,14 @@ export async function resetAll() {
 async function replaceDatabase(next) {
   assertWritable();
   const sync = syncInfo();
+  const members = memberRows();
   db.close();
   db = next;
   db.exec('DELETE FROM sync_state; DELETE FROM sync_outbox;'); // 백업에 남아 있던 동기화 상태는 쓰지 않는다
   loadCurrentAccount();
   if (sync) await syncStart(sync.code);
   else await persist();
+  noteDroppedRooms(members);
 }
 
 // ── 동기화 ─────────────────────────────────────────────────
@@ -1459,23 +1499,34 @@ export function syncCollect(maxChars = 500000) {
 /**
  * 서버 응답을 반영한다. upTo까지 보낸 변경은 outbox에서 지우고, 받은 줄을 넣는다.
  * 보내는 사이 이 기기에서 또 바뀐 줄(아직 outbox에 남은 줄)은 받은 값을 버린다. 다음에 보낸다.
- * @param {{upTo?: number, rows: Array<{t, k, d}>, cursor: number, replaced?: boolean, tables?: string[]}} res
+ * 서버는 받을 줄을 번호 순서로 나눠 주므로, 자식 줄(계획)이 먼저 오고 그 뒤에 고친 부모 줄(계정)은 다음 묶음에 올 수
+ * 있다. 부모가 없어 넣지 못한 줄은 미뤄 두었다가(sync_state 'deferred') 다음 묶음과 함께 다시 넣고, 다 받았는데도
+ * (more가 false) 부모가 없으면 버린다(다른 기기에서 부모를 지웠다).
+ * @param {{upTo?: number, rows: Array<{t, k, d}>, cursor: number, replaced?: boolean, tables?: string[], more?: boolean}} res
  *   replaced: 이번에 보낸 것이 서버 기록을 통째로 바꾸는 요청이었는지
  *   tables: 서버가 받는 표 (예전 서버는 알려 주지 않는다. 그러면 optional 표는 보내지 않는다)
+ *   more: 서버에 아직 받을 줄이 남았는지
  * @returns {Promise<boolean>} 받은 줄로 기록이 바뀌었으면 true (화면을 다시 그린다)
  */
-export async function syncApply({ upTo = 0, rows, cursor, replaced = false, tables = null }) {
+export async function syncApply({ upTo = 0, rows, cursor, replaced = false, tables = null, more = false }) {
+  const members = memberRows();
   const changed = await write(() => {
     db.run('DELETE FROM sync_outbox WHERE seq <= ?', [upTo]);
     if (replaced) syncSet('replace', null);
     syncSet('tables', Array.isArray(tables) ? JSON.stringify(tables) : null);
     const pending = new Set(all('SELECT tbl, key FROM sync_outbox').map((r) => `${r.tbl} ${r.key}`));
-    const result = applyRows(rows.filter((r) => !pending.has(`${r.t} ${r.k}`)));
+    // 미뤄 둔 줄을 받은 줄과 함께 넣는다 (같은 줄이 새로 왔으면 새 것)
+    const incoming = new Map();
+    for (const r of [...JSON.parse(syncGet('deferred') ?? '[]'), ...rows]) incoming.set(`${r.t} ${r.k}`, r);
+    const { changed, failed } = applyRows([...incoming.values()].filter((r) => !pending.has(`${r.t} ${r.k}`)));
+    if (failed.length && !more) console.warn('[sync] 부모가 없어 넣지 못한 줄', failed.length);
+    syncSet('deferred', failed.length && more ? JSON.stringify(failed) : null);
     syncSet('cursor', cursor);
     syncSet('syncedAt', localTimestamp());
-    return result;
+    return changed;
   });
   if (changed) loadCurrentAccount(); // 지금 계정이 다른 기기에서 지워졌을 수 있다
+  noteDroppedRooms(members, { settled: !more });
   return changed;
 }
 
@@ -1489,11 +1540,14 @@ export function syncResetCursor() {
  * rows는 서버의 모든 줄(cursor 0부터 받은 것), cursor는 그 마지막 번호.
  */
 export async function syncAdopt({ code, rows, cursor }) {
+  const members = memberRows();
   await write(() => {
     db.run('DELETE FROM sync_outbox');
+    syncSet('deferred', null);
     syncSet('tracking', null);
     for (const t of [...SYNC_TABLES].reverse()) db.run(`DELETE FROM ${t.name}${t.only ? ` WHERE ${t.only(t.name)}` : ''}`);
-    applyRows(rows.filter((r) => r.d));
+    const { failed } = applyRows(rows.filter((r) => r.d)); // 모두 받은 뒤라 부모가 없는 줄은 버린다
+    if (failed.length) console.warn('[sync] 부모가 없어 넣지 못한 줄', failed.length);
     syncSet('code', code);
     syncSet('cursor', cursor);
     syncSet('epoch', newId());
@@ -1502,6 +1556,46 @@ export async function syncAdopt({ code, rows, cursor }) {
     ensureAccount();
   });
   loadCurrentAccount();
+  noteDroppedRooms(members);
+}
+
+/**
+ * 서버의 모든 줄(cursor 0부터 full로 받은 것)로 이 기기 기록을 맞춘다. 서버가 오래된 지운 줄을 정리해서
+ * 이 기기가 그사이 지워진 줄을 알 수 없을 때(cursor_stale) 쓴다. 서버에 없는 줄은 지우고 받은 줄을 넣되,
+ * 아직 보내지 않은 이 기기 변경은 남긴다(다음에 보낸다). syncAdopt와 달리 동기화는 그대로 이어진다.
+ * 서버가 나중에 받기 시작한 표(optional)는 지우지 않는다: 예전 서버에 보내지 못하고 이 기기에만 남은 줄일 수 있다.
+ * @returns {Promise<boolean>} 기록이 바뀌었으면 true
+ */
+export async function syncReconcile({ rows, cursor }) {
+  const members = memberRows();
+  const changed = await write(() => {
+    const pending = new Set(all('SELECT tbl, key FROM sync_outbox').map((r) => `${r.tbl} ${r.key}`));
+    const onServer = new Set(rows.filter((r) => r.d).map((r) => `${r.t} ${r.k}`));
+    let removed = 0;
+    syncSet('tracking', null);
+    for (const t of [...SYNC_TABLES].reverse()) {
+      if (t.optional) continue;
+      const where = t.only ? ` WHERE ${t.only(t.name)}` : '';
+      for (const row of all(`SELECT ${t.key.join(', ')} FROM ${t.name}${where}`)) {
+        const values = t.key.map((k) => row[k]);
+        const id = `${t.name} ${JSON.stringify(values)}`;
+        if (onServer.has(id) || pending.has(id)) continue;
+        db.run(`DELETE FROM ${t.name} WHERE ${t.key.map((k) => `${k} = ?`).join(' AND ')}`, values);
+        removed += db.getRowsModified();
+      }
+    }
+    syncSet('tracking', 1);
+    const { changed, failed } = applyRows(rows.filter((r) => !pending.has(`${r.t} ${r.k}`)));
+    if (failed.length) console.warn('[sync] 부모가 없어 넣지 못한 줄', failed.length);
+    ensureAccount();
+    syncSet('deferred', null);
+    syncSet('cursor', cursor);
+    syncSet('syncedAt', localTimestamp());
+    return changed || removed > 0;
+  });
+  loadCurrentAccount();
+  noteDroppedRooms(members);
+  return changed;
 }
 
 /**
@@ -1517,6 +1611,7 @@ export async function syncStart(code) {
       const where = only ? ` WHERE ${only(name)}` : '';
       db.run(`INSERT INTO sync_outbox (tbl, key) SELECT '${name}', json_array(${key.join(', ')}) FROM ${name}${where}`);
     }
+    syncSet('deferred', null);
     syncSet('code', code);
     syncSet('cursor', 0);
     syncSet('replace', 1);
@@ -1572,11 +1667,13 @@ function rowKey({ t, k }) {
 /**
  * 받은 줄을 넣거나 지운다(트랜잭션 안에서 부른다). 트리거를 끈 채 넣고, 서로 어긋나는 것(같은 날 같은 구절을
  * 두 기기에서 저장, 기간이 겹치는 계획)은 트리거를 켠 뒤 고쳐서 그 결과도 다른 기기로 가게 한다.
- * @returns {boolean} 넣거나 지운 줄이 있으면 true
+ * @returns {{changed: boolean, failed: Array<{t, k, d}>}} changed: 넣거나 지운 줄이 있는지,
+ *   failed: 부모 줄이 없어 넣지 못한 줄 (부모가 나중에 오면 다시 넣는다)
  */
 function applyRows(rows) {
   rows = rows.filter((r) => rowKey(r));
-  if (!rows.length) return false;
+  const failed = [];
+  if (!rows.length) return { changed: false, failed };
   syncSet('tracking', null);
   // 지운 줄 먼저(부모를 지우면 자식도 함께 지워진다), 그다음 부모 표부터 넣는다.
   for (const r of rows.filter((r) => !r.d)) {
@@ -1593,7 +1690,9 @@ function applyRows(rows) {
     } catch (err) {
       const message = String(err?.message ?? err);
       if (/UNIQUE constraint/.test(message) && r.t === 'saved_verses') verseConflicts.push(r.d);
-      // 부모가 지워진 줄(다른 기기에서 계획을 지우는 사이 읽음 표시한 날 등)이나 형식이 맞지 않는 줄은 버린다.
+      // 부모 줄이 없다: 아직 받지 않았거나(다음 묶음), 다른 기기에서 지웠다(계획을 지우는 사이 읽음 표시한 날 등)
+      else if (/FOREIGN KEY constraint/.test(message)) failed.push(r);
+      // 형식이 맞지 않는 줄은 버린다
       else if (/constraint failed/.test(message)) console.warn('[sync] 넣지 못한 줄', r.t, message);
       else throw err;
     }
@@ -1602,7 +1701,7 @@ function applyRows(rows) {
   for (const d of verseConflicts) resolveVerseConflict(d);
   for (const id of plans) resolvePlanOverlap(id);
   ensureAccount();
-  return true;
+  return { changed: true, failed };
 }
 
 /**

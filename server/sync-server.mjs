@@ -9,8 +9,10 @@
 //   POST   /api/sync/spaces   새 동기화 공간 → {code}
 //   GET    /api/sync/space    공간 요약: 연결하기 전에 보여 줄 계정 이름과 개수
 //   DELETE /api/sync/space    공간과 그 기록을 모두 지운다
-//   POST   /api/sync          {v, cursor, replace?, changes: [{t, k, d}]} → {cursor, more, rows: [{t, k, d}], tables}
+//   POST   /api/sync          {v, cursor, replace?, full?, changes: [{t, k, d}]} → {cursor, more, rows: [{t, k, d}], tables}
 //                              (tables: 받는 표 이름들. 기기는 여기 든 표만 보낸다)
+//                              409 cursor_stale: 그 cursor 뒤의 지운 줄을 이미 정리했다. 기기는 cursor 0부터 full로
+//                              모두 받아, 서버에 없는 줄을 지워 맞춘다 (app/js/sync.js resync)
 //   GET    /api/sync/health   서버와 DB 확인
 //   (공간을 쓰는 요청은 Authorization: Bearer <동기화 코드>)
 //   /api/push/…               읽기 알림 (push.mjs)
@@ -21,6 +23,8 @@
 //
 // 저장 공간: 공간은 누구나 만들 수 있으므로 디스크를 채우지 못하게 줄 하나(MAX_ROW), 공간 하나(줄 수·크기),
 // 데이터베이스 전체(SYNC_MAX_DB_BYTES, 기본 5GB)에 한도를 두고, 400일 동안 아무 기기도 오지 않은 공간은 지운다.
+// 지운 줄은 다른 기기가 받아 가도록 남겨 두지만(계획을 고쳐 저장할 때마다 생긴다), 끝없이 쌓여 줄 수 한도를
+// 채우지 않도록 90일이 지나면 정리한다(PRUNE_AFTER). 그보다 오래 오지 않은 기기는 처음부터 다시 받는다.
 
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
@@ -60,6 +64,7 @@ export const MAX_SPACE_BYTES = 50 * 1024 * 1024;
 // 데이터베이스 전체 크기 한도. 넘으면 기록을 늘리는 요청(새 공간·방, 값이 든 줄)을 받지 않는다(507 server_full).
 export const MAX_DB_BYTES = 5 * 1024 ** 3;
 const STALE = '400 days'; // 이만큼 아무 기기도 동기화하지 않은 공간은 지운다 (읽기 알림·함께 읽기 방과 같다)
+const PRUNE_AFTER = '90 days'; // 지운 줄은 이만큼 지나면 정리한다 (공간마다 하루에 한 번)
 const PAGE_ROWS = 5000; // 응답 하나에 담는 줄 수
 const PAGE_BYTES = 2 * 1024 * 1024;
 
@@ -81,6 +86,11 @@ export const SCHEMA = `
     PRIMARY KEY (space_id, tbl, key)
   );
   CREATE INDEX IF NOT EXISTS sync_rows_by_version ON sync_rows (space_id, version);
+  -- 줄이 마지막으로 바뀐 때 (오래된 지운 줄을 정리하는 데 쓴다)
+  ALTER TABLE sync_rows ADD COLUMN IF NOT EXISTS changed_at timestamptz NOT NULL DEFAULT now();
+  -- 정리한 지운 줄의 가장 큰 번호. cursor가 이보다 작은 기기는 지운 것을 다 받을 수 없어 처음부터 다시 받는다
+  ALTER TABLE sync_spaces ADD COLUMN IF NOT EXISTS pruned bigint NOT NULL DEFAULT 0;
+  ALTER TABLE sync_spaces ADD COLUMN IF NOT EXISTS pruned_at timestamptz;  -- 마지막으로 정리한 때
 `;
 
 // ── HTTP ───────────────────────────────────────────────────
@@ -127,10 +137,19 @@ export async function spaceIdFor(pool, req) {
 export function storageGuard(pool, maxBytes = MAX_DB_BYTES) {
   let size = 0;
   let checkedAt = -Infinity;
+  let measuring = null; // 재는 중이면 함께 기다린다 (동시에 온 요청마다 재지 않도록)
   return async function ensureStorage() {
     if (Date.now() - checkedAt > 60 * 1000) {
-      size = Number((await pool.query('SELECT pg_database_size(current_database()) AS n')).rows[0].n);
-      checkedAt = Date.now();
+      measuring ??= pool
+        .query('SELECT pg_database_size(current_database()) AS n')
+        .then((r) => {
+          size = Number(r.rows[0].n);
+          checkedAt = Date.now();
+        })
+        .finally(() => {
+          measuring = null;
+        });
+      await measuring;
     }
     if (size > maxBytes) throw new HttpError(507, 'server_full');
   };
@@ -138,12 +157,16 @@ export function storageGuard(pool, maxBytes = MAX_DB_BYTES) {
 
 /**
  * push: createPushApi()가 만든 읽기 알림 요청 처리기. 없으면 /api/push/…는 503
- * limits: {maxSpaceRows, maxSpaceBytes, maxDbBytes} 저장 한도 (테스트에서 작게 준다)
+ * limits: {maxSpaceRows, maxSpaceBytes, maxDbBytes, pageRows} 저장 한도와 응답 하나에 담는 줄 수 (테스트에서 작게 준다)
+ * ensureStorage: storageGuard() (읽기 알림과 함께 쓰려고 넘긴다. 없으면 limits.maxDbBytes로 만든다)
  */
-export function createHandler(pool, { push = null, limits = {} } = {}) {
+export function createHandler(
+  pool,
+  { push = null, limits = {}, ensureStorage = storageGuard(pool, limits.maxDbBytes ?? MAX_DB_BYTES) } = {},
+) {
   const maxSpaceRows = limits.maxSpaceRows ?? MAX_SPACE_ROWS;
   const maxSpaceBytes = limits.maxSpaceBytes ?? MAX_SPACE_BYTES;
-  const ensureStorage = storageGuard(pool, limits.maxDbBytes ?? MAX_DB_BYTES);
+  const pageRows = limits.pageRows ?? PAGE_ROWS;
   const rooms = createRoomsApi(pool, { ensureStorage });
 
   async function createSpace() {
@@ -188,10 +211,26 @@ export function createHandler(pool, { push = null, limits = {} } = {}) {
     if (!r.rowCount) throw new HttpError(404, 'no_space');
   }
 
+  /** 공간의 오래된 지운 줄을 정리한다 (공간을 잠근 트랜잭션 안에서). 정리한 가장 큰 번호를 돌려준다 */
+  async function prune(client, spaceId, pruned) {
+    const r = await client.query(
+      `WITH gone AS (
+         DELETE FROM sync_rows WHERE space_id = $1 AND data IS NULL AND changed_at < now() - interval '${PRUNE_AFTER}'
+         RETURNING version
+       )
+       SELECT max(version) AS v FROM gone`,
+      [spaceId],
+    );
+    const next = Math.max(pruned, Number(r.rows[0].v ?? 0));
+    await client.query('UPDATE sync_spaces SET pruned = $2, pruned_at = now() WHERE id = $1', [spaceId, next]);
+    return next;
+  }
+
   /**
    * 보낸 줄을 저장하고, cursor 다음부터 다른 기기가 바꾼 줄을 돌려준다.
    * replace면 공간의 기록을 이 기기 것으로 통째로 바꾼다: 있던 줄을 모두 지운 줄로 만들고(다른 기기가 받아
    * 지우도록) 보낸 줄을 넣는다. 이때는 돌려줄 것이 없다. (보낸 줄이 많으면 첫 요청에만 replace를 붙인다)
+   * full이면 정리한 지운 줄이 있어도 받는다 (cursor 0부터 모두 받아 서버에 없는 줄을 지우는 기기).
    * 응답은 문자열로 만든다(줄의 JSON을 다시 풀지 않도록).
    */
   async function sync(code, body) {
@@ -200,17 +239,36 @@ export function createHandler(pool, { push = null, limits = {} } = {}) {
     if (!Number.isSafeInteger(cursor) || cursor < 0) throw new HttpError(400, 'bad_cursor');
     const changes = parseChanges(body.changes);
     const replace = body.replace === true;
+    const full = body.full === true;
+    // 크기 한도는 값이 든 줄이 있는 요청만 본다. 지우기만 하는 요청은 크기 한도를 넘었어도 받는다(줄 수 한도는 본다:
+    // 서버에 없던 줄을 지운 것으로 보내도 줄이 하나씩 생기므로).
+    // 연결을 쥐기 전에 본다: 크기를 재는 데 연결이 하나 더 필요해서, 요청마다 연결을 쥔 채 기다리면 연결이 모두
+    // 잡혀 있을 때 서로를 영원히 기다린다.
+    const grows = changes.some((c) => c.d !== null);
+    if (grows) await ensureStorage();
 
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       // 같은 공간의 요청은 차례로: 번호를 붙이는 순서와 저장되는 순서가 같아야 cursor로 빠짐없이 받아 간다.
       const space = (
-        await client.query('SELECT id, version FROM sync_spaces WHERE code_hash = $1 FOR UPDATE', [hashCode(code)])
+        await client.query(
+          `SELECT id, version, pruned, (pruned_at IS NULL OR pruned_at < now() - interval '1 day') AS prune_due
+             FROM sync_spaces WHERE code_hash = $1 FOR UPDATE`,
+          [hashCode(code)],
+        )
       ).rows[0];
       if (!space) throw new HttpError(404, 'no_space');
       const before = Number(space.version);
       if (cursor > before) throw new HttpError(409, 'cursor_ahead'); // 서버 DB를 되돌린 경우 등
+      // 줄 수 한도를 보기 전에 정리한다 (지운 줄로 가득 찬 공간도 다시 쓸 수 있게)
+      const pruned = space.prune_due ? await prune(client, space.id, Number(space.pruned)) : Number(space.pruned);
+      if (!replace && !full && cursor < pruned) {
+        // 정리한 것은 남기고, 이 기기에는 처음부터 다시 받으라고 알린다
+        await client.query('UPDATE sync_spaces SET seen_at = now() WHERE id = $1', [space.id]);
+        await client.query('COMMIT');
+        throw new HttpError(409, 'cursor_stale');
+      }
       let version = before;
 
       if (replace) {
@@ -219,22 +277,18 @@ export function createHandler(pool, { push = null, limits = {} } = {}) {
              SELECT tbl, key, row_number() OVER (ORDER BY version, tbl, key) AS n
                FROM sync_rows WHERE space_id = $1 AND data IS NOT NULL
            )
-           UPDATE sync_rows s SET data = NULL, version = $2 + alive.n
+           UPDATE sync_rows s SET data = NULL, version = $2 + alive.n, changed_at = now()
              FROM alive WHERE s.space_id = $1 AND s.tbl = alive.tbl AND s.key = alive.key`,
           [space.id, version],
         );
         version += r.rowCount;
       }
-      // 크기 한도는 값이 든 줄이 있는 요청만 본다. 지우기만 하는 요청은 크기 한도를 넘었어도 받는다(줄 수 한도는 본다:
-      // 서버에 없던 줄을 지운 것으로 보내도 줄이 하나씩 생기므로).
-      const grows = changes.some((c) => c.d !== null);
-      if (grows) await ensureStorage();
       if (changes.length) {
         await client.query(
           `INSERT INTO sync_rows (space_id, tbl, key, data, version)
            SELECT $1, c.t, c.k, c.d, $2 + c.n
              FROM unnest($3::text[], $4::text[], $5::jsonb[]) WITH ORDINALITY AS c(t, k, d, n)
-           ON CONFLICT (space_id, tbl, key) DO UPDATE SET data = excluded.data, version = excluded.version`,
+           ON CONFLICT (space_id, tbl, key) DO UPDATE SET data = excluded.data, version = excluded.version, changed_at = now()`,
           [space.id, version, changes.map((c) => c.t), changes.map((c) => c.k), changes.map((c) => c.d)],
         );
         version += changes.length;
@@ -259,11 +313,11 @@ export function createHandler(pool, { push = null, limits = {} } = {}) {
           `SELECT tbl, key, data::text AS data, version FROM sync_rows
             WHERE space_id = $1 AND version > $2 AND version <= $3
             ORDER BY version LIMIT $4`,
-          [space.id, cursor, before, PAGE_ROWS + 1],
+          [space.id, cursor, before, pageRows + 1],
         );
         let bytes = 0;
         for (const row of r.rows) {
-          if (rows.length >= PAGE_ROWS || bytes >= PAGE_BYTES) {
+          if (rows.length >= pageRows || bytes >= PAGE_BYTES) {
             more = true;
             break;
           }
@@ -336,10 +390,12 @@ export async function startServer({ databaseUrl, port = 5690, host = '127.0.0.1'
   await pool.query(SCHEMA);
   await pool.query(PUSH_SCHEMA);
   await pool.query(ROOMS_SCHEMA);
+  const ensureStorage = storageGuard(pool, limits.maxDbBytes ?? MAX_DB_BYTES);
   const reminders = push && createReminders(pool, push.sender);
   const pushApi =
-    push && createPushApi(pool, { ...push, spaceIdFor: (req) => spaceIdFor(pool, req), deliver: reminders.deliver });
-  const server = http.createServer(createHandler(pool, { push: pushApi, limits }));
+    push &&
+    createPushApi(pool, { ...push, spaceIdFor: (req) => spaceIdFor(pool, req), deliver: reminders.deliver, ensureStorage });
+  const server = http.createServer(createHandler(pool, { push: pushApi, limits, ensureStorage }));
   await new Promise((resolve) => server.listen(port, host, resolve));
   const tick = () => reminders.tick().catch((err) => console.error('읽기 알림 실패:', err.message));
   const timer = push?.interval ? setInterval(tick, push.interval) : null;

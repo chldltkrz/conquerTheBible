@@ -4,6 +4,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import http from 'node:http';
+import { createRequire } from 'node:module';
 
 let skip = false;
 if (!process.env.TEST_DATABASE_URL) skip = 'TEST_DATABASE_URL 없음 (PostgreSQL 테스트 DB)';
@@ -11,13 +13,15 @@ if (!process.env.TEST_DATABASE_URL) skip = 'TEST_DATABASE_URL 없음 (PostgreSQL
 let server = null; // 공간 하나를 작게(20KB, 6줄) 둔 서버
 let full = null; // 데이터베이스가 가득 찬 것으로 보는 서버
 let hashCode = null;
+let newCode = null;
+let createHandler = null;
 
 before(async () => {
   if (skip) return;
   let startServer;
   try {
-    ({ startServer } = await import('../server/sync-server.mjs'));
-    ({ hashCode } = await import('../server/code.mjs'));
+    ({ startServer, createHandler } = await import('../server/sync-server.mjs'));
+    ({ hashCode, newCode } = await import('../server/code.mjs'));
   } catch (err) {
     skip = `동기화 서버를 불러오지 못함 (${err.message}). server/에서 npm install`;
     return;
@@ -88,6 +92,31 @@ t('서버에 없던 줄을 지운 것으로 보내도 줄 수 한도는 넘지 �
   assert.equal(res.body.error, 'space_full');
 });
 
+t('90일 지난 지운 줄은 정리해서, 지운 줄로 가득 찬 공간도 다시 쓴다', async () => {
+  const code = await newSpace();
+  const gone = (i) => ({ ...note(i, 0), d: null });
+  assert.equal((await push(server, code, [1, 2, 3, 4, 5, 6].map(gone))).status, 200);
+  assert.equal((await push(server, code, [note(7, 100)])).body.error, 'space_full');
+  await server.pool.query(
+    `UPDATE sync_rows SET changed_at = now() - interval '91 days'
+      WHERE space_id = (SELECT id FROM sync_spaces WHERE code_hash = $1)`,
+    [hashCode(code)],
+  );
+  await server.pool.query('UPDATE sync_spaces SET pruned_at = NULL WHERE code_hash = $1', [hashCode(code)]);
+  const res = await push(server, code, [note(7, 100)], 6);
+  assert.equal(res.status, 200);
+  // 정리한 지운 줄(1–6번)을 받지 못한 기기는 처음부터 다시 받아야 한다
+  const behind = await push(server, code, [], 3);
+  assert.equal(behind.status, 409);
+  assert.equal(behind.body.error, 'cursor_stale');
+  const again = await api(server, 'POST', '/api/sync', { code, body: { v: 1, cursor: 0, full: true, changes: [] } });
+  assert.equal(again.status, 200);
+  assert.deepEqual(
+    again.body.rows.map((r) => r.k),
+    [note(7, 0).k],
+  );
+});
+
 t('데이터베이스가 한도를 넘으면 새 공간·방과 값이 든 줄은 받지 않고, 지우는 것과 읽는 것은 받는다', async () => {
   const code = await newSpace(); // 한도가 넉넉한 서버에서 만든 공간
   assert.equal((await push(server, code, [note(1, 100)])).status, 200);
@@ -102,6 +131,30 @@ t('데이터베이스가 한도를 넘으면 새 공간·방과 값이 든 줄�
   assert.equal((await push(full, code, [note(2, 100)])).status, 507);
   assert.equal((await push(full, code, [{ ...note(1, 0), d: null }])).status, 200, '지우는 것은 받는다');
   assert.equal((await api(full, 'GET', '/api/sync/space', { code })).status, 200);
+});
+
+t('연결이 하나뿐인 서버에서도 값이 든 동기화가 멈추지 않는다 (저장 공간은 연결을 쥐기 전에 잰다)', async () => {
+  const pg = createRequire(new URL('../server/package.json', import.meta.url))('pg');
+  const app = `ctb-test-one-${process.pid}`;
+  const pool = new pg.Pool({ connectionString: process.env.TEST_DATABASE_URL, max: 1, application_name: app });
+  pool.on('error', () => {}); // 아래에서 끊는 연결
+  const one = http.createServer(createHandler(pool)); // 새 처리기라 아직 크기를 재지 않았다
+  await new Promise((resolve) => one.listen(0, '127.0.0.1', resolve));
+  try {
+    // 공간을 API로 만들면 그때 크기를 재므로 직접 넣는다
+    const codes = [newCode(), newCode()];
+    for (const code of codes) await pool.query('INSERT INTO sync_spaces (code_hash) VALUES ($1)', [hashCode(code)]);
+    const base = { url: `http://127.0.0.1:${one.address().port}` };
+    const timeout = new Promise((resolve) => setTimeout(() => resolve('멈춤'), 5000));
+    const done = Promise.all(codes.map((code) => push(base, code, [note(1, 100)]).then((r) => r.status)));
+    assert.deepEqual(await Promise.race([done, timeout]), [200, 200]);
+  } finally {
+    // 멈췄으면 쥔 연결이 풀리지 않으므로 끊고 닫는다
+    one.closeAllConnections();
+    await server.pool.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1', [app]);
+    await new Promise((resolve) => one.close(resolve));
+    await pool.end();
+  }
 });
 
 t('400일 동안 아무 기기도 오지 않은 공간은 새 공간을 만들 때 지운다', async () => {
