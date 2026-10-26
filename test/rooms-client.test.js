@@ -25,6 +25,7 @@ import {
 } from '../app/js/db.js';
 import { buildGroupPlan, buildPlan } from '../app/js/planner.js';
 import {
+  checkReading,
   checkRoomPlan,
   configureRooms,
   createRoom,
@@ -162,12 +163,20 @@ test('각자 계획 방: 계획 정의는 {kind: "own"}뿐이고, 기간 없이 
   assert.equal(s.progress, memberStatus(1, START, END).progress);
   // 계획이 끝나고 20일 뒤: 14일 안에 분량이 있는 날이 없고 오늘 계획도 없다
   s = statusFor(m, addDays(END, 20));
-  assert.deepEqual(s, { days: {}, progress: null });
+  assert.deepEqual(s, { days: {}, progress: null, reading: null });
+  // 지금 읽는 계획: 이름·범위·기간·읽는 방식을 올리고, 받은 것은 확인해서 날짜로 바꾼다
+  const reading = statusFor(m).reading;
+  assert.deepEqual(reading, { title: '누가복음', range: '누가복음서 1–6장', start: toISO(START), end: toISO(END), mode: 'sequential' });
+  assert.deepEqual(checkReading(reading).start, START);
+  assert.equal(checkReading({ ...reading, start: '어제' }), null);
+  assert.equal(checkReading({ ...reading, mode: 'x' }), null);
+  assert.equal(checkReading(null), null);
   // 같은 계획 방은 지금처럼 방의 기간으로
   await saveRoomMembership({ accountId: 1, code: 'SAME-ROOM-CODE', memberId: 'N', memberKey: 'K', name: '같이', memberName: '나', start: START, end: END });
   const same = roomMemberships().find((x) => x.code === 'SAME-ROOM-CODE');
   assert.equal(same.kind, 'same');
   assert.equal(Object.keys(statusFor(same).days).length, 10);
+  assert.equal('reading' in statusFor(same), false, '같은 계획 방은 계획을 올리지 않는다');
 });
 
 // ── 서버와 주고받기 ────────────────────────────────────────
@@ -459,5 +468,10 @@ t('각자 계획 방: 들어와도 계획은 그대로이고, 서로 그날 읽�
     ],
   );
   assert.deepEqual(roomTally(members), { reading: 2, read: 2 }, '오늘 분량이 없는 사람은 세지 않는다');
+  // 멤버를 누르면 보이는 지금 읽는 계획. 엄마는 오늘 사랑구역 방의 누가복음을 읽는다(시편은 그 뒤에 시작). 이웃은 계획이 없다
+  assert.deepEqual(
+    members.map((x) => checkReading(x.reading) && [checkReading(x.reading).title, checkReading(x.reading).range]),
+    [['누가복음', '누가복음서 1–6장'], ['누가복음', '누가복음서 1–6장'], null],
+  );
   assert.deepEqual(Object.keys(roomData(code).room.members[1].days).length, 3, '엄마는 그저께부터 사흘');
 });

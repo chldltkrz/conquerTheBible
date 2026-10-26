@@ -297,7 +297,7 @@ export const MIGRATIONS = [
   //     15장 끝까지 읽는 구간을 "7절까지"로 적었으므로 8절까지로 고친다. 동기화 중이면 트리거가 다른 기기에도 보낸다.
   extendChapterEnd('ezk', 15, 7),
   // v10: 각자 계획으로 읽는 함께 읽기 방. 'same'은 방의 계획을 함께 읽는 방, 'own'은 각자 자기 계획으로 읽고
-  //      날짜별 읽음과 진도만 나누는 방이다. 'own'은 기간이 없어 end_date를 start_date와 같게 둔다
+  //      날짜별 읽음과 진도, 읽는 계획을 나누는 방이다. 'own'은 기간이 없어 end_date를 start_date와 같게 둔다
   //      (이 열을 모르는 예전 앱은 끝난 방으로 본다).
   `
   ALTER TABLE room_memberships ADD COLUMN kind TEXT NOT NULL DEFAULT 'same';

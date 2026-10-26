@@ -9,7 +9,8 @@
 //   POST   /api/rooms                 {name, plan, member: {name, color}} → {code, member: {id, key}}
 //   GET    /api/rooms/room            → {name, plan, createdAt, members: [{id, name, color, owner, days, progress, …}]}
 //   POST   /api/rooms/members         {name, color} → {id, key}       방에 들어온다 (가득 차면 409 room_full)
-//   PUT    /api/rooms/members/me      {name, color, days, progress}    내 상태를 올린다
+//   PUT    /api/rooms/members/me      {name, color, days, progress, reading?}  내 상태를 올린다
+//                                     (reading: 각자 계획 방에서 지금 읽는 계획 {title, range, start, end, mode})
 //   DELETE /api/rooms/members/me      방에서 나간다 (방장이 나가면 먼저 들어온 멤버가 방장, 아무도 없으면 방을 지운다)
 //   DELETE /api/rooms/members/<번호>  방장이 멤버를 내보낸다
 //   DELETE /api/rooms/room            방장이 방을 없앤다
@@ -40,6 +41,8 @@ export const ROOMS_SCHEMA = `
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (room_id, id)
   );
+  -- 각자 계획 방에서 그 멤버가 지금 읽는 계획 {title, range, start, end, mode} (멤버를 누르면 보인다. 같은 계획 방은 NULL)
+  ALTER TABLE room_members ADD COLUMN IF NOT EXISTS reading jsonb;
 `;
 
 export const MAX_MEMBERS = 30;
@@ -51,6 +54,7 @@ const MEMBER_NAME = 20;
 const STALE = '400 days'; // 이만큼 아무도 상태를 올리지 않은 방은 지운다
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const READING_MODES = new Set(['sequential', 'parallel', 'group']);
 const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const MEMBER_RE = /^([0-9A-Z]{10}):([0-9A-Z]{26})$/;
 
@@ -85,6 +89,24 @@ function parseDays(days) {
   return JSON.stringify(Object.fromEntries(entries));
 }
 
+/** 지금 읽는 계획 {title, range, start, end, mode}. 없으면 null (같은 계획 방, 예전 앱, 오늘 계획이 없는 사람) */
+function parseReading(value) {
+  if (value == null) return null;
+  const ok =
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    typeof value.title === 'string' &&
+    value.title.length <= 100 &&
+    typeof value.range === 'string' &&
+    value.range.length <= 200 &&
+    DATE_RE.test(value.start) &&
+    DATE_RE.test(value.end) &&
+    READING_MODES.has(value.mode);
+  if (!ok) throw new HttpError(400, 'bad_reading');
+  const clean = (t) => t.replace(/[\u0000-\u001f\u007f]/g, '');
+  return JSON.stringify({ title: clean(value.title), range: clean(value.range), start: value.start, end: value.end, mode: value.mode });
+}
+
 function parseProgress(value) {
   if (value == null) return null;
   if (!Number.isInteger(value) || value < 0 || value > 100) throw new HttpError(400, 'bad_progress');
@@ -111,6 +133,7 @@ const memberJson = (r) => ({
   owner: r.owner,
   days: r.days,
   progress: r.progress,
+  reading: r.reading ?? null,
   joinedAt: r.joined_at.toISOString(),
   updatedAt: r.updated_at.toISOString(),
 });
@@ -214,13 +237,14 @@ export function createRoomsApi(pool) {
     const { name, color } = parseMember(body);
     const days = parseDays(body.days);
     const progress = parseProgress(body.progress);
+    const reading = parseReading(body.reading);
     return transaction(async (client) => {
       const roomId = await roomOf(client, req);
       const me = await memberOf(client, req, roomId);
       await client.query(
-        `UPDATE room_members SET name = $3, color = $4, days = $5::jsonb, progress = $6, updated_at = now()
+        `UPDATE room_members SET name = $3, color = $4, days = $5::jsonb, progress = $6, reading = $7::jsonb, updated_at = now()
           WHERE room_id = $1 AND id = $2`,
-        [roomId, me.id, name, color, days, progress],
+        [roomId, me.id, name, color, days, progress, reading],
       );
       await client.query("UPDATE reading_rooms SET seen_at = now() WHERE id = $1 AND seen_at < now() - interval '1 hour'", [
         roomId,

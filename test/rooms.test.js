@@ -175,3 +175,23 @@ test('오래 아무도 쓰지 않은 방은 새 방을 만들 때 지운다', as
   await createRoom();
   assert.equal((await api('GET', '/api/rooms/room', { code })).body.error, 'no_room');
 });
+
+test('각자 계획 방: 멤버가 지금 읽는 계획(reading)을 올리면 다른 멤버도 본다. 보내지 않으면(예전 앱) 비운다', async (ctx) => {
+  if (skip) return ctx.skip(skip);
+  const { code, member } = await createRoom();
+  const reading = { title: '사복음서 한 달 통독', range: '복음서', start: '2026-10-01', end: '2026-10-31', mode: 'sequential' };
+  assert.equal((await put(code, member, { reading })).status, 204);
+  assert.deepEqual((await room(code)).members[0].reading, reading);
+  // 글자 수·꼴이 맞지 않으면 받지 않는다
+  for (const bad of [
+    { ...reading, title: 'x'.repeat(101) },
+    { ...reading, start: '10월 1일' },
+    { ...reading, mode: 'random' },
+    [reading],
+    '복음서',
+  ]) {
+    assert.equal((await put(code, member, { reading: bad })).body.error, 'bad_reading', JSON.stringify(bad).slice(0, 40));
+  }
+  assert.equal((await put(code, member)).status, 204);
+  assert.equal((await room(code)).members[0].reading, null);
+});

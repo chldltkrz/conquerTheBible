@@ -18,6 +18,7 @@ import { currentAccount, listAccounts, listPlans, planOn, roomMemberships } from
 import {
   createRoom,
   deleteRoom,
+  checkReading,
   isOwnRoom,
   isRoomActive,
   joinProblem,
@@ -198,10 +199,35 @@ function memberSub(x) {
   return x.progress == null ? todayText : `${todayText} · 전체 ${x.progress}%`;
 }
 
-function memberList(members, week, now, owner) {
+// 각자 계획 방에서 멤버를 누르면 보이는 그 사람이 읽는 계획 (읽는 방식 이름은 새 계획 화면과 같다)
+const MODE_NAMES = { sequential: '한 권씩 차례로', parallel: '여러 권 동시에', group: '그룹별로 동시에' };
+
+function readingDetail(x, now) {
+  const r = checkReading(x.reading);
+  if (!r) {
+    return html`<div class="room-member-plan">
+      <span>${x.me ? '오늘 읽는 계획이 없습니다' : '읽는 계획을 알 수 없습니다 (오늘 계획이 없거나 앱을 아직 업데이트하지 않았습니다)'}</span>
+    </div>`;
+  }
+  const length = daysBetween(r.start, r.end) + 1;
+  const when =
+    compareDate(now, r.start) < 0
+      ? `${length}일 계획 · ${formatDate(r.start)}에 시작`
+      : compareDate(now, r.end) > 0
+        ? `${length}일 계획 · 끝남`
+        : `${length}일 중 ${daysBetween(r.start, now) + 1}일째`;
+  return html`<div class="room-member-plan">
+    <b>${r.title}</b>
+    <span>${[r.range !== r.title && r.range, MODE_NAMES[r.mode]].filter(Boolean).join(' · ')}</span>
+    <span>${periodLabel(r)} · ${when}</span>
+  </div>`;
+}
+
+/** open: 각자 계획 방에서 읽는 계획을 펼친 멤버 번호들 (같은 계획 방이면 null) */
+function memberList(members, week, now, owner, open = null) {
   return html`<ul class="room-members">
     ${members.map(
-      (x) => html`<li class="room-member ${x.me ? 'is-me' : ''}">
+      (x) => html`<li class="room-member ${x.me ? 'is-me' : ''} ${open ? 'is-expandable' : ''}" data-member="${open ? x.id : ''}">
         ${avatar(x)}
         <span class="room-member-name"><b>${x.name}</b>${x.me ? html`<span class="tag">나</span>` : ''}${x.owner
           ? html`<span class="tag is-owner">방장</span>`
@@ -211,6 +237,12 @@ function memberList(members, week, now, owner) {
           : ''}
         <small class="room-member-sub">${memberSub(x)}</small>
         ${week.length ? weekStrip(x, week, now) : ''}
+        ${open
+          ? html`<button class="room-member-toggle" aria-expanded="${open.has(x.id)}">
+                ${open.has(x.id) ? '읽는 계획 접기' : '읽는 계획 보기'}<span aria-hidden="true">${open.has(x.id) ? '▴' : '▾'}</span>
+              </button>
+              ${open.has(x.id) ? readingDetail(x, now) : ''}`
+          : ''}
       </li>`,
     )}
   </ul>`;
@@ -257,6 +289,7 @@ export function openRoomSheet(code, changed = () => {}) {
   const first = find();
   if (!first) return;
   const { dlg, close } = createSheet({ labelledBy: 'room-title' });
+  const open = new Set(); // 각자 계획 방: 읽는 계획을 펼친 멤버
 
   const render = () => {
     const m = find();
@@ -284,14 +317,14 @@ export function openRoomSheet(code, changed = () => {}) {
           ${room
             ? html`${roomHero(m, room, members, now)}
                 ${week.length ? legend : ''}
-                ${memberList(members, week, now, owner)}`
+                ${memberList(members, week, now, owner, isOwnRoom(m) ? open : null)}`
             : html`<p class="muted">${waitingText(data)}</p>`}
           <div class="button-row">
             <button class="btn btn-primary" data-room-invite>${roomIcon}<span>함께 읽을 사람 초대하기</span></button>
           </div>
           <p class="sheet-note">${isOwnRoom(m)
             ? `각자 자기 계획으로 읽는 방입니다. 방 사람들에게는 이 방에서 쓰는 이름과 날짜별로 그날 분량을 몇 퍼센트 읽었는지,
-              지금 읽는 계획의 진도만 보이고 무엇을 읽는지(계획 이름·본문)는 보이지 않습니다.`
+              지금 읽는 계획의 진도, 그리고 사람을 누르면 그 계획의 이름·범위·기간이 보입니다.`
             : '방 사람들에게는 이 방에서 쓰는 이름과 날짜별 읽음, 계획 진도만 보입니다.'}
             묵상 메모와 저장한 구절, 다른 계획은 보이지 않습니다. 한 방에는 ${MAX_MEMBERS}명까지 들어올 수 있습니다.</p>
           <div class="room-leave">
@@ -374,6 +407,16 @@ export function openRoomSheet(code, changed = () => {}) {
     if (e.target.closest('[data-room-delete]')) return remove(m);
     const k = e.target.closest('[data-room-kick]');
     if (k) return kick(m, k.dataset.roomKick, k.dataset.label);
+    // 각자 계획 방: 멤버를 누르면 그 사람이 읽는 계획을 펼치거나 접는다
+    const row = e.target.closest('.room-member[data-member]');
+    if (row?.dataset.member) {
+      const id = row.dataset.member;
+      if (!open.delete(id)) {
+        open.add(id);
+        track('room_member_reading_opened', { me: row.classList.contains('is-me') });
+      }
+      render();
+    }
   });
   window.addEventListener('rooms-updated', render);
   dlg.addEventListener('close', () => window.removeEventListener('rooms-updated', render));
@@ -498,7 +541,7 @@ export function openRoomCreate(plan = null, { done = () => {}, name = '', member
         </label>
         <label class="room-plan">
           <input type="radio" name="kind" value="own" />
-          <span><b>각자 계획으로</b><small>각자 자기 계획으로 읽고, 읽은 퍼센트와 진도만 나눕니다</small></span>
+          <span><b>각자 계획으로</b><small>각자 자기 계획으로 읽고, 읽은 퍼센트와 진도를 나눕니다</small></span>
         </label>
       </div>
       <div data-kind="same">
@@ -519,7 +562,8 @@ export function openRoomCreate(plan = null, { done = () => {}, name = '', member
         </button>
       </div>
       <p data-kind="own" hidden>들어온 사람의 계획은 바뀌지 않습니다. 저마다 오늘 읽을 분량을 몇 퍼센트 읽었는지와 지금 읽는
-        계획의 진도만 방에 보이고, 무엇을 읽는지는 보이지 않습니다. 기간이 없어 계획을 새로 만들어도 방은 이어집니다.</p>
+        계획의 진도가 방에 보이고, 사람을 누르면 그 사람이 읽는 계획(이름·범위·며칠 계획인지)이 보입니다.
+        기간이 없어 계획을 새로 만들어도 방은 이어집니다.</p>
       <label class="field">
         <span>방 이름</span>
         <input name="name" value="${name}" maxlength="${ROOM_NAME_MAX}" placeholder="예: 사랑구역, 우리 가족" required autocomplete="off" />
@@ -598,7 +642,7 @@ export function openRoomCreate(plan = null, { done = () => {}, name = '', member
 /** 들어가면 계획이 어떻게 되는지 */
 function planNote(found) {
   if (isOwnRoom(found.plan)) {
-    return html`각자 계획으로 읽는 방입니다. 내 계획은 바뀌지 않고, 그날 분량을 몇 퍼센트 읽었는지와 진도만 방에 보입니다.
+    return html`각자 계획으로 읽는 방입니다. 내 계획은 바뀌지 않고, 그날 분량을 몇 퍼센트 읽었는지와 진도, 읽는 계획(이름·범위·기간)이 방에 보입니다.
       ${planOn(today()) ? '' : html`<small class="notice-sub">오늘 읽는 계획이 없습니다. 들어간 뒤 계획을 만들면 그때부터 방에 올라갑니다.</small>`}`;
   }
   const { same, overlaps: list } = plansForRoom(found.plan);
@@ -763,9 +807,9 @@ export function roomSection() {
             })}
           </ul>`
         : html`<p>가족·구역·목장 사람들과 함께 읽으며, 오늘 누가 읽었는지 봅니다 ("오늘 5명 중 3명 읽음").
-            <b>같은 계획</b>을 함께 읽거나, <b>각자 계획</b>으로 읽고 읽은 퍼센트와 진도만 나눌 수 있습니다.</p>`}
-      <p class="muted small">방을 만들면 초대 코드와 링크가 나옵니다. 방 사람들에게는 방에서 쓰는 이름과 날짜별 읽음, 계획 진도만 보이고
-        묵상 메모와 저장한 구절은 보이지 않습니다.${listAccounts().length > 1 ? ' 계정마다 따로 들어갑니다.' : ''}</p>
+            <b>같은 계획</b>을 함께 읽거나, <b>각자 계획</b>으로 읽고 읽은 퍼센트와 진도, 읽는 계획을 나눌 수 있습니다.</p>`}
+      <p class="muted small">방을 만들면 초대 코드와 링크가 나옵니다. 방 사람들에게는 방에서 쓰는 이름과 날짜별 읽음, 계획 진도(각자 계획
+        방은 읽는 계획의 이름·범위·기간도)만 보이고 묵상 메모와 저장한 구절은 보이지 않습니다.${listAccounts().length > 1 ? ' 계정마다 따로 들어갑니다.' : ''}</p>
       <div class="button-row">
         <button class="btn btn-primary" data-room-action="create">${roomIcon}<span>방 만들기</span></button>
         <button class="btn btn-ghost" data-room-action="join">초대 코드로 들어가기</button>

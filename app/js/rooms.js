@@ -4,17 +4,19 @@
 // 방은 두 가지다 (멤버십의 kind, 서버에 둔 방의 plan으로 안다).
 //   'same': 같은 계획을 함께 읽는 방. 방에 계획 정의를 두고, 들어오는 사람에게 같은 계획을 만든다. 기간이 그 계획의 기간이다.
 //   'own':  각자 계획으로 읽는 방. 방의 plan은 {kind: 'own'}뿐이고, 들어와도 계획을 만들거나 바꾸지 않는다.
-//           멤버마다 자기 계획으로 그날 분량을 몇 퍼센트 읽었는지와 지금 읽는 계획의 진도만 나눈다. 기간이 없다.
+//           멤버마다 자기 계획으로 그날 분량을 몇 퍼센트 읽었는지, 지금 읽는 계획의 진도와 그 계획(이름·범위·기간)을 나눈다.
+//           기간이 없다.
 //
 // 방에는 초대 코드로 들어간다. 동기화 코드와 꼴은 같지만 따로 만든 코드라서, 방 사람들에게는 방 이름과
-// 멤버 이름, 날짜별로 그날 분량을 몇 퍼센트 읽었는지, 계획 전체 진도만 보인다. (메모·저장한 구절은 보내지 않는다)
+// 멤버 이름, 날짜별로 그날 분량을 몇 퍼센트 읽었는지, 계획 전체 진도(각자 계획 방은 읽는 계획도)만 보인다.
+// (메모·저장한 구절은 보내지 않는다)
 // 날짜별 읽음은 이 기기가 계산해 올린다: 방의 기간 동안 그 계정의 계획을 날마다 본다(계획을 고쳐 저장해도 이어진다).
 //
 // 언제: 기록을 바꾸고 잠시 뒤 올리고, 앱을 열 때·돌아올 때·켜 둔 동안 1분마다 방 소식을 받는다.
 // window에 알리는 것: 'rooms-updated'(방 소식을 새로 받음), 'room-gone'(방이 없어졌거나 내보내져 목록에서 뺌, detail {name})
 // 이 모듈은 Node 테스트에서도 import되므로 최상위에서 window/document를 직접 쓰지 않는다.
 
-import { book, getIndex, selectionToChapters } from './bible.js';
+import { book, describeSelection, getIndex, selectionToChapters } from './bible.js';
 import { addDays, compareDate, daysBetween, formatDate, fromISO, toISO, today } from './dates.js';
 import {
   currentAccount,
@@ -253,9 +255,31 @@ export function memberStatus(accountId, start, end, now = today()) {
   return { days, progress: current ? Math.min(100, progressOf(current).percent) : null };
 }
 
-/** 그 방에 올릴 내 읽음. 각자 계획 방은 오늘까지 최근 OWN_DAYS일, 진도는 오늘 읽는 계획의 것 */
+/** 각자 계획 방에서 멤버를 누르면 보일 지금 읽는 계획 {title, range, start, end, mode}. 계획이 없으면 null */
+export const readingOf = (plan) =>
+  plan && {
+    title: plan.title.slice(0, 100),
+    range: describeSelection(plan.selection).slice(0, 200),
+    start: toISO(plan.start),
+    end: toISO(plan.end),
+    mode: plan.mode,
+  };
+
+/** 서버에서 받은 멤버의 reading을 확인한다 → {title, range, start, end, mode} (날짜는 {y, m, d}) 또는 null */
+export function checkReading(r) {
+  if (!r || typeof r.title !== 'string' || typeof r.range !== 'string' || !validDate(r.start) || !validDate(r.end)) return null;
+  if (!MODES.has(r.mode)) return null;
+  return { title: r.title, range: r.range, start: fromISO(r.start), end: fromISO(r.end), mode: r.mode };
+}
+
+/**
+ * 그 방에 올릴 내 읽음. 각자 계획 방은 오늘까지 최근 OWN_DAYS일, 진도는 오늘 읽는 계획의 것이고,
+ * 그 계획(reading)도 올린다. 같은 계획 방은 모두 방의 계획을 읽으므로 올리지 않는다.
+ */
 export const statusFor = (m, now = today()) =>
-  isOwnRoom(m) ? memberStatus(m.accountId, addDays(now, 1 - OWN_DAYS), now, now) : memberStatus(m.accountId, m.start, m.end, now);
+  isOwnRoom(m)
+    ? { ...memberStatus(m.accountId, addDays(now, 1 - OWN_DAYS), now, now), reading: readingOf(planOn(now, m.accountId)) }
+    : memberStatus(m.accountId, m.start, m.end, now);
 
 // ── 방 소식 ────────────────────────────────────────────────
 
