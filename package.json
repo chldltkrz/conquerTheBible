@@ -15,7 +15,8 @@
     "postinstall": "node scripts/vendor.mjs",
     "backgrounds": "node scripts/backgrounds.mjs",
     "manual": "node scripts/manual.mjs",
-    "landing": "node scripts/landing.mjs"
+    "landing": "node scripts/landing.mjs",
+    "indexnow": "node scripts/indexnow.mjs"
   },
   "engines": {
     "node": ">=20"

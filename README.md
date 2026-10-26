@@ -391,6 +391,7 @@ cd server && node -e "const k=require('web-push').generateVAPIDKeys(); console.l
 app/                  배포할 정적 사이트 (PWA)
   index.html, sw.js, manifest.webmanifest
   robots.txt, sitemap.xml, favicon.ico   검색 로봇용
+  <32자리 16진수>.txt IndexNow 키 (npm run indexnow)
   js/planner.js       분량 나누기 (DOM 없는 순수 모듈)
   js/plancalc.js      분량 나누기를 Web Worker(js/planworker.js)에서 돌린다 (1년 계획도 화면이 멈추지 않게)
   js/db.js            SQLite 스키마와 질의, 동기화할 줄 모으기·받은 줄 넣기
@@ -424,6 +425,7 @@ scripts/
   serve.mjs           개발용 정적 서버
   manual.mjs          사용설명서 PDF 만들기 (화면 찍기, lib/manual-demo.mjs 예시 기록, lib/manual-env.mjs 브라우저)
   landing.mjs         소개 페이지의 화면 사진과 "고르게 나누기" 그래프 자료 만들기 (사용설명서와 같은 예시 기록)
+  indexnow.mjs        배포한 뒤 sitemap.xml의 주소를 IndexNow로 네이버·Bing 등에 알리기
 docs/manual/          사용설명서 글(manual.html)과 꾸밈(manual.css)
 test/                 node:test 테스트
 ```
@@ -436,8 +438,10 @@ test/                 node:test 테스트
 - 앱이 뜨기 전 화면(`<main>` 안의 `.boot`)과 `<noscript>`에 앱 이름과 소개가 들어 있어,
   자바스크립트를 실행하지 않는 검색 로봇도 내용을 읽습니다.
 - 소개 페이지 `app/landing/index.html`(`https://delicious-manna.com/landing/`)은 앱을 띄우지 않는 정적 페이지라
-  검색 로봇이 그대로 읽습니다. 자기 canonical·Open Graph와 자주 묻는 질문 구조화 데이터(`FAQPage`)가 있으며, 질문을 고치면
-  `<head>`의 JSON-LD도 함께 고칩니다. 화면 사진과 그래프 자료(성경 전체 1년 계획을 장 수로 나눈 것과 견준 하루 분량)는
+  검색 로봇이 그대로 읽습니다. 자기 canonical·Open Graph와 구조화 데이터(`WebPage`, 이동 경로 `BreadcrumbList`,
+  자주 묻는 질문 `FAQPage`)가 있으며, 질문을 고치면 `<head>`의 JSON-LD도 함께 고칩니다. 검색엔진은 구조화 데이터를
+  페이지마다 따로 읽으므로 `WebSite`·`WebApplication`은 `index.html`과 같은 `@id`·내용으로 소개 페이지에도 두고, 고칠 때는 둘 다 고칩니다.
+  앱 화면의 링크는 `#/…` 주소라 검색 로봇이 따라가지 않으므로, `index.html`의 앱이 뜨기 전 화면에 소개 페이지 링크를 둡니다. 화면 사진과 그래프 자료(성경 전체 1년 계획을 장 수로 나눈 것과 견준 하루 분량)는
   `npm run landing`으로 다시 만듭니다(앱 화면이나 `planner.js`를 바꿨을 때). `/landing`은 nginx가 `/landing/`으로 보냅니다.
 - `app/robots.txt`는 `/api/`만 막고 `sitemap.xml`을 알려 줍니다. 화면을 그리는 데 필요한 `js/`, `data/`, `vendor/`는 막지 않습니다.
 - 링크 미리보기 그림(`icons/og-image.png`, 1200×630)과 `favicon.ico`는 `npm run icons`로 만듭니다.
@@ -451,6 +455,10 @@ test/                 node:test 테스트
 - 검색 등록: [Google Search Console](https://search.google.com/search-console)과
   [네이버 서치어드바이저](https://searchadvisor.naver.com)에 사이트를 등록하고 `sitemap.xml`을 제출합니다.
   소유 확인용 메타 태그(`google-site-verification`, `naver-site-verification`)를 받으면 `index.html`의 `<head>`에 넣습니다.
+  새 페이지를 만들었으면 Search Console의 URL 검사에서 색인 생성을 요청합니다.
+- IndexNow: 배포한 뒤 `npm run indexnow`(또는 `npm run indexnow -- <주소>`)로 `sitemap.xml`의 주소를 네이버·Bing 등에 알립니다
+  (`scripts/indexnow.mjs`). 키는 `app/<32자리 16진수>.txt`이고 그 파일에 같은 키 글자가 들어 있어야 합니다(키를 바꾸면 파일 이름도).
+  Google은 IndexNow를 쓰지 않습니다.
 
 ## 배포
 

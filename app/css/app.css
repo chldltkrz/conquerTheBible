@@ -152,6 +152,15 @@ code {
   color: var(--muted);
 }
 
+.boot-about {
+  margin-top: 28px;
+  font-size: 14px;
+}
+
+.boot-about a {
+  color: var(--muted);
+}
+
 /* 인앱 브라우저에서 처음 열었을 때 (js/inapp.js) */
 .boot.inapp {
   max-width: 26em;
