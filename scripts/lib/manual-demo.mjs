@@ -8,6 +8,7 @@ import { describeSelection, formatSegments, getIndex, selectionToChapters, useIn
 import {
   createAccount,
   exportFile,
+  renameAccount,
   listPlans,
   saveDayNote,
   savePlan,
@@ -90,6 +91,9 @@ function dayOf(tracks, b, c, v) {
 export async function buildDemo(SQL, index, kind = 'main') {
   useIndex(index);
   useMemoryDatabase(new SQL.Database(), SQL);
+  // 처음 연 앱의 기본 계정은 "기쁜 수달" 같은 무작위 이름이다. 화면 사진이 늘 같도록 정해 둔다.
+  // 계정 셋인 예시 기록은 오래 써 온 기록이라 예전 기본 이름 '나'를 그대로 쓴다.
+  await renameAccount(1, kind === 'fresh' ? '기쁜 수달' : '나');
   if (kind === 'fresh') return exportFile();
 
   // ── 나: 사복음서 한 달. 8·9일은 밀렸고, 10일부터 어제(16일)까지 이어 읽었다(연속 7일). 오늘은 아직.

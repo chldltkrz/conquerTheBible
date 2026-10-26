@@ -66,7 +66,10 @@ function device() {
       return d.use();
     },
   };
-  return d.use();
+  d.use();
+  // 처음 만든 기본 계정은 "기쁜 수달" 같은 무작위 이름이다. 기기끼리 견주기 쉽게 예전 기본 이름으로 둔다
+  d.db.run("UPDATE accounts SET name = '나'");
+  return d;
 }
 
 /** 계정 이름들 (같은 초에 만든 계정은 차례가 정해지지 않으므로 이름 순으로) */
@@ -462,9 +465,12 @@ t('동기화 중에 백업을 가져오거나 모두 지우면 다른 기기도 
   await resetAll();
   a.keepCurrent();
   assert.ok(syncInfo(), '모두 지워도 동기화는 이어진다');
+  const fresh = accountNames();
+  assert.equal(fresh.length, 1);
+  assert.match(fresh[0], /^[가-힣]+ [가-힣]+$/, '새 기본 계정은 "형용사 동물" 이름');
   await sync(a);
   await sync(b);
-  assert.deepEqual(accountNames(), ['나']);
+  assert.deepEqual(accountNames(), fresh);
   assert.equal(listPlans().length, 0);
 });
 

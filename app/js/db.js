@@ -5,6 +5,7 @@
 /* global initSqlJs */
 
 import { addDays, daysBetween, fromISO, localTimestamp, toISO } from './dates.js';
+import { OLD_DEFAULT_NAME, randomName } from './names.js';
 
 const IDB_NAME = 'conquer-the-bible';
 const IDB_STORE = 'files';
@@ -492,7 +493,10 @@ export function resumeWriting() {
 
 // ── SQLite ─────────────────────────────────────────────────
 
-/** 밀린 마이그레이션을 적용한다. 하나라도 적용했으면 true. (테스트에서도 쓴다) */
+/**
+ * 밀린 마이그레이션을 적용한다. 하나라도 적용했으면 true. (테스트에서도 쓴다)
+ * 처음 만드는 데이터베이스면 v2가 만든 기본 계정('나')에 "기쁜 수달" 같은 이름을 붙인다(함께 읽기 방에서 헷갈리지 않도록).
+ */
 export function migrate(target) {
   const version = target.exec('PRAGMA user_version')[0].values[0][0];
   // 테이블을 다시 만드는 동안 연쇄 삭제가 일어나지 않도록 외래 키 검사를 끈다. (트랜잭션 밖에서만 바꿀 수 있다)
@@ -510,6 +514,7 @@ export function migrate(target) {
     }
   }
   target.exec('PRAGMA foreign_keys = ON');
+  if (version === 0) target.run('UPDATE accounts SET name = ? WHERE name = ?', [randomName(), OLD_DEFAULT_NAME]);
   return version < MIGRATIONS.length;
 }
 
@@ -1631,7 +1636,7 @@ function ensureAccount() {
   if (one('SELECT id FROM accounts LIMIT 1')) return;
   db.run('INSERT INTO accounts (id, name, color, created_at) VALUES (?, ?, ?, ?)', [
     newId(),
-    '나',
+    randomName(),
     ACCOUNT_COLORS[0],
     localTimestamp(),
   ]);

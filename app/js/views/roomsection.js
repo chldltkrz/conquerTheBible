@@ -38,7 +38,8 @@ import {
   roomTally,
 } from '../rooms.js';
 import { normalizeCode } from '../sync.js';
-import { confirmDialog, copyText, createSheet, html, setHTML, toast } from '../ui.js';
+import { OLD_DEFAULT_NAME, randomName } from '../names.js';
+import { confirmDialog, copyText, createSheet, html, josa, setHTML, toast } from '../ui.js';
 import { track } from '../analytics.js';
 import { avatar, checkIcon, isMonthPlan, newPlanHref, periodLabel } from './common.js';
 import { renderQr } from './syncsection.js';
@@ -52,6 +53,12 @@ function dayState(pct) {
   if (pct == null) return 'off';
   return pct === 100 ? 'read' : pct > 0 ? 'part' : 'todo';
 }
+
+/**
+ * 방에서 보일 내 이름으로 권할 것: 계정 이름. 예전 기본 이름('나')이거나 방에 같은 이름이 있으면
+ * 방 사람들과 겹치지 않는 "기쁜 수달" 같은 이름
+ */
+const memberNameFor = (name, taken = []) => (name === OLD_DEFAULT_NAME || taken.includes(name) ? randomName(taken) : name);
 
 /** 나를 맨 앞에, 나머지는 들어온 순서대로 */
 const sortMembers = (members) => [...members.filter((x) => x.me), ...members.filter((x) => !x.me)];
@@ -519,7 +526,7 @@ export function openRoomCreate(plan = null, { done = () => {}, name = '', member
       </label>
       <label class="field">
         <span>방에서 보일 내 이름</span>
-        <input name="member" value="${memberName || acc.name}" maxlength="${MEMBER_NAME_MAX}" required autocomplete="off" />
+        <input name="member" value="${memberName || memberNameFor(acc.name)}" maxlength="${MEMBER_NAME_MAX}" required autocomplete="off" />
       </label>
       <p class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
@@ -643,7 +650,7 @@ export function openRoomJoin(prefill = '', { via = 'code', done = () => {} } = {
           <small>${found.members.length}명이 함께 읽는 중: ${shown}</small></p>
         <label class="field">
           <span>방에서 보일 내 이름</span>
-          <input name="member" value="${acc.name}" maxlength="${MEMBER_NAME_MAX}" required autocomplete="off" />
+          <input name="member" value="${memberNameFor(acc.name, names)}" maxlength="${MEMBER_NAME_MAX}" required autocomplete="off" />
         </label>
         <p class="notice">${planNote(found)}</p>
         ${listAccounts().length > 1
@@ -693,6 +700,7 @@ export function openRoomJoin(prefill = '', { via = 'code', done = () => {} } = {
   const join = async (form) => {
     const memberName = form.member.value.trim();
     if (!memberName) return fail(form, '방에서 보일 이름을 넣어 주세요.');
+    if (found.members.some((x) => x.name === memberName)) return fail(form, `방에 이미 ${memberName}${josa(memberName, '이', '가')} 있습니다. 다른 이름을 써 주세요.`);
     let result;
     try {
       result = await joinRoom(found, memberName);
