@@ -16,7 +16,7 @@ import {
   ymKey,
 } from '../dates.js';
 import { plansOverlapping } from '../db.js';
-import { html, setHTML } from '../ui.js';
+import { html, keepRanges, setHTML } from '../ui.js';
 import {
   accountPrefix,
   bindReadToggles,
@@ -102,7 +102,7 @@ export async function calendarView(root, [y, m]) {
         rest
           ? html`<span class="cal-cell ${cls}" aria-label="${label}"><b>${d}</b>${entry.moved ? html`<small>옮김</small>` : ''}</span>`
           : html`<a class="cal-cell ${cls}" href="${readHref(date)}" aria-label="${label}">
-              <b>${d}</b><small>${formatSegments(entry.segments, { short: true })}</small>
+              <b>${d}</b><small>${keepRanges(formatSegments(entry.segments, { short: true }))}</small>
             </a>`,
       );
     }

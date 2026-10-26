@@ -13,7 +13,7 @@
   --surface-2: #eee9df;
   --ink: #1d1f1e;
   --ink-2: #474b49;
-  --muted: #7a7d78;
+  --muted: #666963; /* 배경·카드·회색 칸 위 모두 대비 4.5:1 넘게 (#7a7d78은 3.5–4.1) */
   --line: #e2dccf;
   --accent: #2f6a55;
   --accent-ink: #ffffff;
@@ -1154,7 +1154,8 @@ button.stat:active {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  word-break: break-all;
+  /* 줄은 띄어쓰기에서 바꾸어 "마" / "10–12"로 (break-all이면 "마 1" / "0–1" / "2"처럼 숫자가 갈라진다).
+     범위의 대시 뒤는 keepRanges가 붙여 두고, 칸보다 긴 범위만 body의 overflow-wrap으로 나눈다 */
 }
 
 .cal-cell.is-blank {
@@ -1190,6 +1191,33 @@ button.stat:active {
 
 .cal-cell.is-today {
   border-color: var(--accent);
+}
+
+/* 좁은 화면: 칸 안 글자 폭을 넓혀 "10–12"가 한 줄에 들어가게 (360px에서 글자 폭 29 → 34px) */
+@media (max-width: 380px) {
+  .cal {
+    padding: 6px;
+  }
+
+  .cal-week,
+  .cal-grid {
+    gap: 3px;
+  }
+
+  .cal-cell {
+    padding: 6px 2px;
+  }
+
+  .cal-cell small {
+    font-size: 11px;
+    letter-spacing: -0.02em;
+  }
+}
+
+@media (max-width: 340px) {
+  .cal-cell small {
+    font-size: 10.5px;
+  }
 }
 
 /* ── 새 계획 ──────────────────────────────────────────── */
@@ -2556,7 +2584,7 @@ body:has(.select-bar:not([hidden])) .toast {
   place-items: center;
   border-radius: 4px;
   font-style: normal;
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 700;
   color: #fff;
 }
@@ -2573,7 +2601,7 @@ body:has(.select-bar:not([hidden])) .toast {
   display: flex;
   justify-content: space-between;
   margin-top: 1px;
-  font-size: 9px;
+  font-size: 11px;
   color: var(--muted);
 }
 

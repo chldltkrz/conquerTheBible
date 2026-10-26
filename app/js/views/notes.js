@@ -2,7 +2,7 @@
 
 import { formatDay, formatTimestamp } from '../dates.js';
 import { listNotes, planOn } from '../db.js';
-import { html, setHTML } from '../ui.js';
+import { html, keepRanges, setHTML } from '../ui.js';
 import { readHref } from './common.js';
 import { verseHead, verseRef } from './saved.js';
 import { openExportSheet } from './exportsheet.js';
@@ -41,7 +41,7 @@ export async function notesView(root) {
                   <b class="saved-ref">${formatDay(n.date.y, n.date.m, n.date.d)}</b>
                   <span class="note-kind">읽은 날</span>
                 </div>
-                <p class="note-passage">${n.passage}</p>
+                <p class="note-passage">${keepRanges(n.passage)}</p>
                 <p class="note-text">${n.text}</p>
                 <div class="saved-foot">
                   <small>${formatTimestamp(n.updatedAt)} 저장</small>

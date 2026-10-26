@@ -15,7 +15,7 @@ import {
   ymKey,
 } from '../dates.js';
 import { currentAccount, listAccounts, listPlans, planOn, plansOverlapping, rebalancePlan, saveVerseToday } from '../db.js';
-import { confirmDialog, html, setHTML, formatNumber, toast } from '../ui.js';
+import { confirmDialog, html, keepRanges, setHTML, formatNumber, toast } from '../ui.js';
 import { track } from '../analytics.js';
 import { dailyVerseRef, loadPassage, passageRef, passageText } from '../verses.js';
 import { openStatSheet } from './stats.js';
@@ -230,7 +230,7 @@ export async function todayView(root) {
           ${entry.parts.map(
             (p) => html`<li class="${p.readAt ? 'is-read' : ''}">
               <a href="${readHref(now, p.track)}">
-                <b>${formatSegments(p.segments)}</b><small>약 ${readingMinutes(p.chars)}분${partStarted(entry, p)
+                <b>${keepRanges(formatSegments(p.segments))}</b><small>약 ${readingMinutes(p.chars)}분${partStarted(entry, p)
                   ? ` · ${readPercent(entry, [p])}% 읽음`
                   : ''}</small>
               </a>
@@ -259,7 +259,7 @@ export async function todayView(root) {
       const pct = readPercent(entry);
       todayCard = html`<article class="today-card ${done ? 'is-done' : ''}">
         <p class="today-meta">${plan.title} · ${dayLabel(plan, entry)}</p>
-        <h2 class="today-ref">${formatSegments(entry.segments)}</h2>
+        <h2 class="today-ref">${keepRanges(formatSegments(entry.segments))}</h2>
         <p class="today-sub">약 ${readingMinutes(entry.chars)}분 · ${formatNumber(entry.chars)}자${!done && pct ? ` · ${pct}% 읽음` : ''}</p>
         ${todayProgress(done, pct)}
         <div class="today-actions">

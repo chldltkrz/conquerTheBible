@@ -169,6 +169,12 @@ export function choiceDialog({ title, message, choices }) {
 
 export const formatNumber = (n) => n.toLocaleString('ko-KR');
 
+/**
+ * 화면에 보일 글에서 "1–5장"처럼 대시로 이은 숫자가 줄 끝에서 "1–" / "5장"으로 갈라지지 않게 대시 뒤에 단어 잇기(U+2060)를 넣는다.
+ * 메모와 함께 저장하거나 알림·공유로 보내는 글에는 쓰지 않는다.
+ */
+export const keepRanges = (text) => text.replace(/–(?=\d)/g, '–\u2060');
+
 /** 클립보드에 복사한다. 성공하면 true */
 export async function copyText(text) {
   try {

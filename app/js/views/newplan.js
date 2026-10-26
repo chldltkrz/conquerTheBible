@@ -43,7 +43,7 @@ import {
 } from '../db.js';
 import { buildGroupPlan, buildParallelPlan, buildPlan } from '../planner.js';
 import { translationsFor } from '../prefs.js';
-import { confirmDialog, formatNumber, html, setHTML, toast } from '../ui.js';
+import { confirmDialog, formatNumber, html, keepRanges, setHTML, toast } from '../ui.js';
 import { accountPrefix, dayDate, dayList, newPlanHref, periodLabel, startingPeriod } from './common.js';
 import { track } from '../analytics.js';
 import { resumeRoomCreate, roomCreatePending } from './roomsection.js';
@@ -651,7 +651,7 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
             <span class="day-link">
               ${dayDate(d.date)}
               <span class="day-ref">${d.parts.length
-                ? d.parts.map((p) => html`<span class="ref-line">${formatSegments(p.segments)}${carryMark(d.date, p.segments)}</span>`)
+                ? d.parts.map((p) => html`<span class="ref-line">${keepRanges(formatSegments(p.segments))}${carryMark(d.date, p.segments)}</span>`)
                 : d.moved ? '분량을 뒤로 옮김' : '쉬는 날'}</span>
               ${d.parts.length ? html`<span class="day-min">${readingMinutes(d.chars)}분</span>` : ''}
             </span>

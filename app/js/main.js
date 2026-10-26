@@ -24,7 +24,7 @@ import { leaveInAppBrowser } from './inapp.js';
 
 const main = document.getElementById('main');
 
-// tab은 아래 메뉴 강조용(본문 화면도 'month'), screen은 사용 통계에 쓰는 화면 이름
+// tab은 아래 메뉴 강조용(본문 화면은 'month', 들어오기 전 화면이 따로 있으면 그 화면 — READER_FROM), screen은 사용 통계에 쓰는 화면 이름
 const routes = [
   { re: /^#?\/?$/, tab: 'today', screen: 'today', view: todayView },
   { re: /^#\/month\/(\d{4})-(\d{2})$/, tab: 'month', screen: 'calendar', view: calendarView },
@@ -44,6 +44,11 @@ const routes = [
 
 let renderSeq = 0;
 
+// 본문 화면은 오늘·묵상 메모 화면에서 열었으면 그 화면에 딸린 것으로 본다: 아래 메뉴는 그 탭을 강조하고 뒤로 버튼은 그 화면으로 간다.
+// 달력에서 열었거나 링크로 바로 열었으면 달력(본문 날짜의 달)이다. 본문 안에서 다른 날로 옮겨도 처음 화면을 기억한다.
+const READER_FROM = new Set(['today', 'notes']);
+let lastScreen = null; // 본문이 아닌 마지막 화면 {hash, screen, tab}
+
 /** refresh: 다른 기기에서 받은 기록으로 지금 화면을 다시 그린다 (사용 통계·스크롤·소리로 듣기는 그대로) */
 async function route({ refresh = false } = {}) {
   const hash = location.hash || '#/';
@@ -54,8 +59,12 @@ async function route({ refresh = false } = {}) {
   }
   const seq = ++renderSeq;
   if (!refresh) track('$pageview', { screen: match.r.screen });
+  const reading = match.r.screen === 'reader';
+  if (!reading) lastScreen = { hash, screen: match.r.screen, tab: match.r.tab };
+  const from = reading && READER_FROM.has(lastScreen?.screen) ? lastScreen : null;
+  const tab = from?.tab ?? match.r.tab;
   document.querySelectorAll('.tabbar a').forEach((a) => {
-    a.toggleAttribute('aria-current', a.dataset.tab === match.r.tab);
+    a.toggleAttribute('aria-current', a.dataset.tab === tab);
     if (a.dataset.tab === 'month') {
       const t = today();
       a.href = `#/month/${ymKey(t.y, t.m)}`;
@@ -72,7 +81,7 @@ async function route({ refresh = false } = {}) {
   try {
     // 화면마다 main 영역을 통째로 다시 그린다. 이전 화면의 비동기 작업이 늦게 끝나도
     // 덮어쓰지 않도록 isCurrent()로 확인할 수 있게 한다.
-    await match.r.view(main, params, { isCurrent: () => seq === renderSeq });
+    await match.r.view(main, params, { isCurrent: () => seq === renderSeq, from });
     if (seq !== renderSeq) return;
     if (refresh) window.scrollTo(0, scrollY);
     else main.focus({ preventScroll: true });

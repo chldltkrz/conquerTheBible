@@ -29,7 +29,7 @@ import {
   verseKey,
 } from '../db.js';
 import { FONT_SIZE, applyReadingSettings, pageMode, readingMode, setReadingMode } from '../prefs.js';
-import { html, raw, setHTML, toast } from '../ui.js';
+import { html, keepRanges, raw, setHTML, toast } from '../ui.js';
 import {
   accountPrefix,
   bookmarkIcon,
@@ -55,7 +55,7 @@ import { createListening, playIcon, speakerIcon } from './listen.js';
 const POETRY = new Set(['job', 'psa', 'pro', 'sng', 'lam']);
 
 /** 주소의 날짜(y, m, d)가 들어 있는 계획의 그날 분량. 읽음·구절 기록은 계획의 몇 번째 날(entry.day)로 남긴다. */
-export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
+export async function readerView(root, [y, m, d, focusTrack], { isCurrent, from }) {
   const plan = planOn({ y, m, d });
   const entry = plan && entryOn(plan, { y, m, d });
   if (!entry || !entry.segments.length) {
@@ -76,6 +76,10 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
   // 이웃한 날이 다른 달이면 달도 붙인다: "7일" / "11월 1일"
   const navLabel = ({ date }) => (date.m === m ? `${date.d}일` : `${date.m}월 ${date.d}일`);
   const title = formatSegments(entry.segments);
+  // 뒤로: 오늘·묵상 메모에서 열었으면 그 화면, 아니면 이날의 달력 (main.js의 READER_FROM)
+  const back = from
+    ? { href: from.hash, label: from.screen === 'today' ? '오늘로' : '묵상 메모로' }
+    : { href: `#/month/${ymKey(y, m)}`, label: '달력으로' };
   const day = entry.day;
   const note = getDayNote({ y, m, d });
   // 사용 통계: 본문을 연 뒤 읽음 표시까지 걸린 시간, 소리로 듣기를 썼는지
@@ -85,10 +89,10 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
   setHTML(
     root,
     html`<header class="reader-head">
-        <a class="icon-btn" href="#/month/${ymKey(y, m)}" aria-label="달력으로">‹</a>
+        <a class="icon-btn" href="${back.href}" aria-label="${back.label}">‹</a>
         <div class="reader-title">
           <small>${accountPrefix()}${formatDay(y, m, d)} · ${idx + 1}/${readingDays.length}<span class="read-pct"></span></small>
-          <b>${title}</b>
+          <b>${keepRanges(title)}</b>
         </div>
         ${player ? html`<button class="icon-btn listen-btn" data-action="listen" aria-label="소리로 듣기">${speakerIcon}</button>` : ''}
         <div class="font-ctl" role="group" aria-label="글자 크기">
@@ -628,7 +632,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
           ? parts.map(
               (p) => html`<section class="track" id="track-${p.track}" data-part="${p.track}">
                 <div class="track-head">
-                  <b>${p.title}</b><span>${formatSegments(p.segments)} · 약 ${readingMinutes(p.chars)}분</span>
+                  <b>${p.title}</b><span>${keepRanges(formatSegments(p.segments))} · 약 ${readingMinutes(p.chars)}분</span>
                 </div>
                 ${chapters(p.segments)}
                 <div class="track-foot" data-track-foot="${p.track}"></div>
