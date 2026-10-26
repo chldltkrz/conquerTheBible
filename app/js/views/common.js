@@ -35,6 +35,7 @@ import {
 import { html, josa, keepRanges, setHTML, toast } from '../ui.js';
 import { openShareSheet } from './cardsheet.js';
 import { rebalanceTrack } from '../planner.js';
+import { randomName } from '../names.js';
 import { READING_TRANSLATIONS, readingMode } from '../prefs.js';
 import { analyticsOn, track, trackOnce } from '../analytics.js';
 
@@ -175,7 +176,8 @@ export function openAccountSwitcher() {
         })}
       </ul>
       <form class="account-new">
-        <input name="name" placeholder="새 계정 이름" maxlength="20" required autocomplete="off" aria-label="새 계정 이름" />
+        <input name="name" value="${randomName(listAccounts().map((acc) => acc.name))}" placeholder="새 계정 이름"
+          maxlength="20" required autocomplete="off" aria-label="새 계정 이름" />
         <button class="btn btn-primary btn-sm">추가</button>
       </form>
       <div class="dialog-actions"><button class="btn btn-ghost" data-close>닫기</button></div>`,

@@ -5,7 +5,7 @@
 /* global initSqlJs */
 
 import { addDays, daysBetween, fromISO, localTimestamp, toISO } from './dates.js';
-import { OLD_DEFAULT_NAME, randomName } from './names.js';
+import { OLD_DEFAULT_NAME, randomName, seededRandom } from './names.js';
 
 const IDB_NAME = 'conquer-the-bible';
 const IDB_STORE = 'files';
@@ -495,7 +495,7 @@ export function resumeWriting() {
 
 /**
  * 밀린 마이그레이션을 적용한다. 하나라도 적용했으면 true. (테스트에서도 쓴다)
- * 처음 만드는 데이터베이스면 v2가 만든 기본 계정('나')에 "기쁜 수달" 같은 이름을 붙인다(함께 읽기 방에서 헷갈리지 않도록).
+ * 예전 기본 이름 '나'인 계정(v2가 만든 기본 계정, 이름을 바꾸지 않은 예전 계정)에는 "기쁜 수달" 같은 이름을 붙인다.
  */
 export function migrate(target) {
   const version = target.exec('PRAGMA user_version')[0].values[0][0];
@@ -514,8 +514,24 @@ export function migrate(target) {
     }
   }
   target.exec('PRAGMA foreign_keys = ON');
-  if (version === 0) target.run('UPDATE accounts SET name = ? WHERE name = ?', [randomName(), OLD_DEFAULT_NAME]);
-  return version < MIGRATIONS.length;
+  const named = nameOldDefaultAccounts(target);
+  return version < MIGRATIONS.length || named;
+}
+
+/**
+ * 예전 기본 이름 '나'를 그대로 쓰는 계정에 "기쁜 수달" 같은 이름을 붙인다(함께 읽기 방에서 헷갈리지 않도록). 붙였으면 true.
+ * 동기화하는 계정(무작위 큰 번호)은 번호로 이름을 정해, 같은 계정을 가진 기기들이 따로 붙여도 같은 이름이 된다.
+ */
+function nameOldDefaultAccounts(target) {
+  const accounts = target.exec(`SELECT id, name FROM accounts ${ACCOUNT_ORDER}`)[0]?.values ?? [];
+  const old = accounts.filter(([, name]) => name === OLD_DEFAULT_NAME);
+  const taken = accounts.map(([, name]) => name);
+  for (const [id] of old) {
+    const name = randomName(taken, id >= SMALL_ID ? seededRandom(id) : Math.random);
+    target.run('UPDATE accounts SET name = ? WHERE id = ?', [name, id]);
+    taken.push(name);
+  }
+  return old.length > 0;
 }
 
 export async function openDatabase() {
@@ -1770,8 +1786,12 @@ function resolvePlanOverlap(id) {
   }
 }
 
-/** 계정이 하나도 없으면(다른 기기에서 모두 지운 경우 등) 기본 계정을 만든다 */
+/**
+ * 받은 줄을 넣은 뒤: 계정이 하나도 없으면(다른 기기에서 모두 지운 경우 등) 기본 계정을 만들고,
+ * 아직 예전 기본 이름 '나'인 계정(예전 앱을 쓰는 기기에서 온 것)에는 이름을 붙인다.
+ */
 function ensureAccount() {
+  nameOldDefaultAccounts(db);
   if (one('SELECT id FROM accounts LIMIT 1')) return;
   db.run('INSERT INTO accounts (id, name, color, created_at) VALUES (?, ?, ?, ?)', [
     newId(),

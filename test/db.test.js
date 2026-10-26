@@ -61,7 +61,10 @@ test('v1 기록을 기본 계정으로 옮기며 아무것도 잃지 않는다',
   const db = v1Database();
   assert.equal(migrate(db), true);
   assert.equal(rows(db, 'PRAGMA user_version')[0][0], MIGRATIONS.length);
-  assert.deepEqual(rows(db, 'SELECT id, name FROM accounts'), [[1, '나']]);
+  // 기본 계정 '나'에는 "기쁜 수달" 같은 이름이 붙는다
+  const [[id, name]] = rows(db, 'SELECT id, name FROM accounts');
+  assert.equal(id, 1);
+  assert.match(name, /^[가-힣]+ [가-힣]+$/);
   // 달 계획은 그 달 1일부터 말일까지의 기간이 된다
   assert.deepEqual(rows(db, 'SELECT id, account_id, start_date, end_date, title FROM plans'), [
     [7, 1, '2026-10-01', '2026-10-31', '신약'],

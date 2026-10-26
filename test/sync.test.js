@@ -73,8 +73,8 @@ function device() {
     },
   };
   d.use();
-  // 처음 만든 기본 계정은 "기쁜 수달" 같은 무작위 이름이다. 기기끼리 견주기 쉽게 예전 기본 이름으로 둔다
-  d.db.run("UPDATE accounts SET name = '나'");
+  // 처음 만든 기본 계정은 "기쁜 수달" 같은 무작위 이름이다. 기기끼리 견주기 쉽게 같은 이름으로 둔다 ('나'는 예전 기본 이름이라 다시 이름이 붙는다)
+  d.db.run("UPDATE accounts SET name = '나의 계정'");
   return d;
 }
 
@@ -337,10 +337,10 @@ t('코드로 연결한 기기는 모든 계정의 기록을 받고, 그 뒤로 �
 
   const b = device();
   const code = await pair(a, b);
-  assert.deepEqual(accountNames(), ['나', '엄마']);
+  assert.deepEqual(accountNames(), ['나의 계정', '엄마']);
   assert.equal(syncInfo().code, code);
   assert.equal(getSetting('fontSize'), null, '글자 크기는 기기마다 따로');
-  const me = accountByName('나');
+  const me = accountByName('나의 계정');
   await switchAccount(me);
   const plan = planOn(oct1);
   assert.equal(plan.title, '마가복음');
@@ -507,8 +507,26 @@ t('계정을 지우면 다른 기기에서도 지워지고, 지금 쓰던 계정
   await deleteAccount(dad);
   await sync(a);
   await sync(b);
-  assert.deepEqual(accountNames(), ['나']);
-  assert.equal(currentAccount().name, '나');
+  assert.deepEqual(accountNames(), ['나의 계정']);
+  assert.equal(currentAccount().name, '나의 계정');
+});
+
+t('예전 앱에서 온 기본 이름 "나" 계정에는 받은 기기가 이름을 붙이고, 기기마다 같은 이름이 된다', async (ctx) => {
+  if (skip) return ctx.skip(skip);
+  const a = device();
+  const b = device();
+  await pair(a, b);
+
+  a.use();
+  await renameAccount(currentAccount().id, '나'); // 예전 앱이 '나'로 올린 것처럼
+  await sync(a);
+  await sync(b);
+  const [name] = accountNames();
+  assert.match(name, /^[가-힣]+ [가-힣]+$/);
+  await sync(a);
+  assert.deepEqual(accountNames(), [name]);
+  b.use();
+  assert.deepEqual(accountNames(), [name]);
 });
 
 t('이 기기 기록을 남기며 연결하면 다른 기기들의 기록이 이 기기 것으로 바뀐다', async (ctx) => {
@@ -525,8 +543,8 @@ t('이 기기 기록을 남기며 연결하면 다른 기기들의 기록이 이
   assert.ok(rows(c.db, 'SELECT id FROM accounts').every(([id]) => id >= 2 ** 32), '번호를 새로 받는다');
 
   await sync(a);
-  assert.deepEqual(accountNames(), ['c의 계정', '나']);
-  await switchAccount(accountByName('나'));
+  assert.deepEqual(accountNames(), ['c의 계정', '나의 계정']);
+  await switchAccount(accountByName('나의 계정'));
   assert.deepEqual(
     listPlans().map((p) => p.title),
     ['c의 계획'],
@@ -553,8 +571,8 @@ t('동기화 중에 백업을 가져오거나 모두 지우면 다른 기기도 
   a.keepCurrent();
   await sync(a);
   await sync(b);
-  assert.deepEqual(accountNames(), ['나', '백업 계정']);
-  await switchAccount(accountByName('나')); // 쓰던 계정이 지워져 다른 계정으로 바뀌었을 수 있다
+  assert.deepEqual(accountNames(), ['나의 계정', '백업 계정']);
+  await switchAccount(accountByName('나의 계정')); // 쓰던 계정이 지워져 다른 계정으로 바뀌었을 수 있다
   assert.deepEqual(
     listPlans().map((p) => p.title),
     ['백업 계획'],
