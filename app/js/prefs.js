@@ -50,3 +50,11 @@ export async function setReadingMode(change) {
 
 /** 그 보기로 본문을 보여 줄 때 불러올 역본들 (본문 역본이 먼저) */
 export const translationsFor = ({ main, companion } = readingMode()) => (companion ? [main, companion] : [main]);
+
+/** 본문을 넘기는 방식: 'scroll' 그날 분량을 위아래로 이어서 | 'chapter' 한 장씩 (옆으로 밀거나 버튼으로 넘긴다). 기기마다 따로 둔다 */
+export const PAGE_MODES = [
+  { id: 'scroll', label: '위아래로' },
+  { id: 'chapter', label: '장마다' },
+];
+
+export const pageMode = () => (getSetting('pageMode', 'scroll') === 'chapter' ? 'chapter' : 'scroll');

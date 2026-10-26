@@ -2107,6 +2107,102 @@ button.stat:active {
   margin-top: 6px;
 }
 
+/* ── 장마다 넘기기 (설정 > 넘기는 방식) ─────────────────── */
+/* 지금 장만 보이고, 병렬 읽기면 그 장이 든 책만, 책의 읽음 버튼은 그 책의 마지막 장에서 */
+.scripture.is-paged .chapter:not(.is-current),
+.scripture.is-paged .track:not(.is-current),
+.scripture.is-paged .track:not(.is-last-page) .track-foot {
+  display: none;
+}
+
+.scripture.is-paged .chapter + .chapter,
+.scripture.is-paged .track + .track {
+  margin-top: 0;
+  border-top: 0;
+}
+
+.scripture.is-paged .enter-next {
+  animation: page-in-next 0.22s ease-out;
+}
+
+.scripture.is-paged .enter-prev {
+  animation: page-in-prev 0.22s ease-out;
+}
+
+@keyframes page-in-next {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+}
+
+@keyframes page-in-prev {
+  from {
+    opacity: 0;
+    transform: translateX(-28px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scripture.is-paged .enter-next,
+  .scripture.is-paged .enter-prev {
+    animation: none;
+  }
+}
+
+.pager {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 4px;
+  font-family: var(--font-sans);
+}
+
+.pager[hidden] {
+  display: none;
+}
+
+.pager-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  min-height: 56px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+}
+
+.pager-btn.is-next {
+  grid-column: 3;
+  align-items: flex-end;
+  text-align: right;
+}
+
+.pager-btn small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pager-btn b {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pager-count {
+  color: var(--muted);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── 절 선택·저장 ─────────────────────────────────────── */
 .scripture .verse {
   cursor: pointer;

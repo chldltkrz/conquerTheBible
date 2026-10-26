@@ -20,10 +20,11 @@ export const rateLabel = (r) => `${r}×`;
  * 본문 화면에 듣기를 붙인다. 지원하지 않는 브라우저면 null.
  * @param {HTMLElement} root 본문 화면
  * @param {Map<string, {b, c, v, e, t, tr?}>} verses 절 키 → 절 (tr: 본문 t의 역본, BSB면 영어 목소리로 읽는다)
- * @param {{onVerse?: (key: string) => void}} [on] onVerse: 절을 읽기 시작할 때 (어디까지 읽었는지 기록하는 데 쓴다)
+ * @param {{onVerse?: (key: string) => void, onShow?: (el: HTMLElement) => void}} [on]
+ *   onVerse: 절을 읽기 시작할 때 (어디까지 읽었는지 기록하는 데 쓴다), onShow: 강조하기 전에 (장마다 넘기기면 그 장을 펼친다)
  * @returns {{open(fromKey?), handle(action), reset()} | null}
  */
-export function createListening(root, verses, { onVerse } = {}) {
+export function createListening(root, verses, { onVerse, onShow } = {}) {
   if (!player) return null;
   const bar = root.querySelector('#tts-bar');
   let loaded = false;
@@ -76,6 +77,7 @@ export function createListening(root, verses, { onVerse } = {}) {
     speaking?.classList.remove('is-speaking');
     speaking = key ? root.querySelector(`.verse[data-ref="${key}"]`) : null;
     if (!speaking) return;
+    onShow?.(speaking);
     speaking.classList.add('is-speaking');
     // 위쪽 머리말과 아래쪽 바에 가리지 않는 곳에 있도록 따라 내려간다.
     const r = speaking.getBoundingClientRect();

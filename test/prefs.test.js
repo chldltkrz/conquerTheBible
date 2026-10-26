@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { setSetting, useMemoryDatabase } from '../app/js/db.js';
-import { readingMode, setReadingMode, translationsFor } from '../app/js/prefs.js';
+import { pageMode, readingMode, setReadingMode, translationsFor } from '../app/js/prefs.js';
 
 const SQL = await createRequire(import.meta.url)('sql.js')();
 
@@ -38,4 +38,13 @@ test('역본 보기: 본문 역본과 함께 볼 역본을 따로 바꾼다', as
   assert.deepEqual(readingMode(), { main: 'gae', companion: 'saenew' });
   await setReadingMode({ companion: null });
   assert.deepEqual(readingMode(), { main: 'gae', companion: null });
+});
+
+test('넘기는 방식: 처음에는 위아래로, 모르는 값도 위아래로', async () => {
+  useMemoryDatabase(new SQL.Database());
+  assert.equal(pageMode(), 'scroll');
+  await setSetting('pageMode', 'chapter');
+  assert.equal(pageMode(), 'chapter');
+  await setSetting('pageMode', 'swipe');
+  assert.equal(pageMode(), 'scroll');
 });

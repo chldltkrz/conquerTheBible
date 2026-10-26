@@ -28,7 +28,7 @@ import {
   verseCounts,
   verseKey,
 } from '../db.js';
-import { FONT_SIZE, applyReadingSettings, readingMode, setReadingMode } from '../prefs.js';
+import { FONT_SIZE, applyReadingSettings, pageMode, readingMode, setReadingMode } from '../prefs.js';
 import { html, raw, setHTML, toast } from '../ui.js';
 import {
   accountPrefix,
@@ -102,6 +102,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
       <article class="scripture" aria-busy="true">
         <p class="muted loading">본문을 불러오는 중…</p>
       </article>
+      <nav class="pager" id="pager" aria-label="장 넘기기" hidden></nav>
       <p class="reader-hint">마음에 남는 절을 눌러 저장해 보세요. 저장한 구절은 <a href="#/saved">구절</a> 탭에 모입니다.</p>
       <section class="memo-box">
         <label for="day-memo">
@@ -186,7 +187,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     el.querySelector('.vcount').title = n ? `${n}번 저장한 절` : '';
   };
 
-  const listening = createListening(root, verses, { onVerse: (key) => reachKey(key) });
+  const listening = createListening(root, verses, { onVerse: (key) => reachKey(key), onShow: (el) => showPageOf(el) });
   const bar = root.querySelector('#select-bar');
   const renderBar = () => {
     bar.hidden = selected.size === 0;
@@ -239,6 +240,8 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
   };
 
   root.onclick = async (e) => {
+    const step = e.target.closest('[data-page]')?.dataset.page;
+    if (step) return flip(Number(step));
     const main = e.target.closest('[data-reading-main]')?.dataset.readingMain;
     if (main) return changeMode({ main });
     const font = e.target.closest('[data-font]');
@@ -375,6 +378,8 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     if (ratio) best.set(p.track, { pos: p.progress, ratio });
   }
   let verseEls = []; // 본문의 절 요소들 (문서 순서 = 위에서 아래)
+  let pages = []; // 장마다 넘기기의 장(.chapter) 요소들. 위아래로 읽으면 빈 배열
+  let page = 0; // 보이는 장
   const trackOf = (el) => (parallel ? Number(el.closest('[data-part]')?.dataset.part) : parts[0].track);
 
   const pctEl = root.querySelector('.read-pct');
@@ -423,21 +428,22 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     if (el) reach(trackOf(el), key);
   }
 
-  // 읽는 줄보다 위에서 시작한 마지막 절을 찾는다. 페이지 끝까지 내렸으면 마지막 절.
+  // 읽는 줄보다 위에서 시작한 마지막 절을 찾는다. 페이지 끝까지 내렸으면 마지막 절. 장마다 넘기기면 보이는 장에서만.
   const sample = () => {
     sampling = false;
-    if (!verseEls.length) return;
+    const els = pages.length ? [...pages[page].querySelectorAll('.verse[data-ref]')] : verseEls;
+    if (!els.length) return;
     const line = window.innerHeight * READ_LINE;
     let found = -1;
-    for (let lo = 0, hi = verseEls.length - 1; lo <= hi; ) {
+    for (let lo = 0, hi = els.length - 1; lo <= hi; ) {
       const mid = (lo + hi) >> 1;
-      if (verseEls[mid].getBoundingClientRect().top <= line) {
+      if (els[mid].getBoundingClientRect().top <= line) {
         found = mid;
         lo = mid + 1;
       } else hi = mid - 1;
     }
-    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) found = verseEls.length - 1;
-    if (found >= 0) reach(trackOf(verseEls[found]), verseEls[found].dataset.ref);
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) found = els.length - 1;
+    if (found >= 0) reach(trackOf(els[found]), els[found].dataset.ref);
   };
   let armed = false; // 손으로 스크롤해야 센다
   let sampling = false;
@@ -493,6 +499,7 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
     const target = best.get(trackNo);
     const el = target && verseElOf(trackNo, target.pos);
     if (!el) return;
+    showPageOf(el);
     // 그 절이 읽는 줄에 오도록 내린다
     window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - window.innerHeight * READ_LINE + 4, behavior: 'smooth' });
     el.classList.remove('is-resume');
@@ -505,6 +512,104 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
   const article = root.querySelector('.scripture');
   const codes = [...new Set(entry.segments.map((s) => s.b))];
   let opened = false;
+
+  // ── 장마다 넘기기 (설정 > 읽기 화면 > 넘기는 방식) ─────────
+  // 장(구간)을 한 번에 하나씩 보여 주고, 옆으로 밀거나 아래 버튼·좌우 화살표 키로 넘긴다. 숨긴 장은 그리지 않으므로
+  // 어디까지 읽었는지는 보이는 장의 절로 재고(sample), 다음 장으로 넘기면 앞 장은 끝까지 읽은 것으로 본다.
+  // 이어 읽기와 소리로 듣기는 그 절이 든 장을 펼친다. 장이 하나뿐인 날은 위아래로 읽기와 같다(pages가 빈 배열).
+  const paged = pageMode() === 'chapter';
+  const pagerEl = root.querySelector('#pager');
+  const chapterName = (el) => el.querySelector('.chapter-title')?.textContent.trim() ?? '';
+
+  const renderPager = () => {
+    pagerEl.hidden = !pages.length;
+    if (!pages.length) return;
+    const prev = pages[page - 1];
+    const next = pages[page + 1];
+    setHTML(
+      pagerEl,
+      html`${prev
+          ? html`<button class="pager-btn" data-page="-1" aria-label="이전 장: ${chapterName(prev)}"><small>‹ 이전 장</small><b>${chapterName(prev)}</b></button>`
+          : html`<span></span>`}
+        <span class="pager-count">${page + 1} / ${pages.length}</span>
+        ${next
+          ? html`<button class="pager-btn is-next" data-page="1" aria-label="다음 장: ${chapterName(next)}"><small>다음 장 ›</small><b>${chapterName(next)}</b></button>`
+          : html`<span></span>`}`,
+    );
+  };
+
+  /** i번째 장을 보여 준다. dir: 넘긴 방향(1 다음 장, -1 이전 장, 0 그 자리에서 펼치기) */
+  const showPage = (i, dir = 0) => {
+    if (!pages.length) return renderPager();
+    const from = page;
+    page = Math.max(0, Math.min(pages.length - 1, i));
+    pages.forEach((el, k) => el.classList.toggle('is-current', k === page));
+    // 병렬 읽기: 지금 장이 든 책(묶음)만 보이고, 그 책의 읽음 버튼은 그 책의 마지막 장에서 보인다
+    article.querySelectorAll('.track').forEach((t) => {
+      const here = t.contains(pages[page]);
+      t.classList.toggle('is-current', here);
+      t.classList.toggle('is-last-page', here && !pages.slice(page + 1).some((el) => t.contains(el)));
+    });
+    renderPager();
+    if (!dir) return;
+    if (dir > 0 && page > from) {
+      const last = [...pages[from].querySelectorAll('.verse[data-ref]')].at(-1);
+      if (last) reach(trackOf(last), last.dataset.ref);
+    }
+    const el = pages[page];
+    el.classList.remove('enter-next', 'enter-prev');
+    void el.offsetWidth; // 이어서 넘겨도 처음부터
+    el.classList.add(dir > 0 ? 'enter-next' : 'enter-prev');
+    // 장 처음이 머리말 바로 아래에 오도록 올린다 (이미 보이면 그대로)
+    const top = article.getBoundingClientRect().top + window.scrollY - root.querySelector('.reader-head').offsetHeight - 8;
+    if (window.scrollY > top) window.scrollTo({ top });
+  };
+  const flip = (step) => {
+    if (page + step >= 0 && page + step < pages.length) showPage(page + step, step);
+  };
+  /** 그 요소가 든 장을 펼친다 (이어 읽기, 소리로 듣기) */
+  function showPageOf(el) {
+    const i = pages.findIndex((p) => p.contains(el));
+    if (i >= 0 && i !== page) showPage(i);
+  }
+
+  // 좌우 화살표 키 (입력란에 쓰는 중이거나 창이 떠 있으면 그대로). 포커스가 본문 밖(body)에 있어도 받도록 창에 단다
+  window.addEventListener(
+    'keydown',
+    (e) => {
+      if (!alive() || !pages.length || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.target.closest?.('input, textarea, select') || document.querySelector('dialog[open]')) return;
+      e.preventDefault();
+      flip(e.key === 'ArrowRight' ? 1 : -1);
+    },
+    { signal: listen.signal },
+  );
+
+  // 옆으로 밀어 넘기기. 세로로 스크롤하거나 글자를 고르는 중이면 넘기지 않고, 화면 가장자리(브라우저의 뒤로 가기 몸짓)는 뺀다.
+  let touch = null;
+  article.addEventListener(
+    'touchstart',
+    (e) => {
+      const t = e.touches[0];
+      const edge = t.clientX < 24 || t.clientX > window.innerWidth - 24;
+      touch = pages.length && e.touches.length === 1 && !edge ? { x: t.clientX, y: t.clientY, at: e.timeStamp } : null;
+    },
+    { passive: true },
+  );
+  article.addEventListener(
+    'touchend',
+    (e) => {
+      if (!touch) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - touch.x;
+      const dy = t.clientY - touch.y;
+      const quick = e.timeStamp - touch.at < 800;
+      touch = null;
+      if (!quick || Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.8 || window.getSelection()?.toString()) return;
+      flip(dx < 0 ? 1 : -1);
+    },
+    { passive: true },
+  );
 
   /** 지금 고른 역본(보기)으로 본문을 그린다. 역본을 바꾸면 다시 부른다. */
   const showText = async () => {
@@ -535,6 +640,12 @@ export async function readerView(root, [y, m, d, focusTrack], { isCurrent }) {
       article.removeAttribute('aria-busy');
       repaint();
       verseEls = [...article.querySelectorAll('.verse[data-ref]')];
+      // 장마다 넘기기: 역본을 바꿔 다시 그려도 보던 장에 머문다. 오늘 화면에서 책을 골라 들어왔으면 그 책의 첫 장부터
+      pages = paged ? [...article.querySelectorAll('.chapter')] : [];
+      if (pages.length < 2) pages = [];
+      article.classList.toggle('is-paged', pages.length > 0);
+      if (!opened && focusTrack != null) page = Math.max(0, pages.findIndex((el) => el.closest(`#track-${focusTrack}`)));
+      showPage(page);
       if (opened) return;
       opened = true;
       renderResume();

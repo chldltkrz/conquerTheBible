@@ -17,7 +17,7 @@ import {
   setSetting,
   syncInfo,
 } from '../db.js';
-import { FONT_SIZE, applyReadingSettings, readingMode, setReadingMode, translationsFor } from '../prefs.js';
+import { FONT_SIZE, PAGE_MODES, applyReadingSettings, pageMode, readingMode, setReadingMode, translationsFor } from '../prefs.js';
 import { confirmDialog, html, setHTML, toast } from '../ui.js';
 import { avatar, companionSelect, isMonthPlan, periodLabel, translationButtons } from './common.js';
 import { koreanVoices, pickVoice, player, RATES, voicesReady } from '../tts.js';
@@ -166,6 +166,14 @@ export async function settingsView(root, _params, { isCurrent }) {
               </div>
             </div>
             <div class="field-row">
+              <span>넘기는 방식</span>
+              <div class="segmented" role="radiogroup" aria-label="넘기는 방식">
+                ${PAGE_MODES.map(
+                  (x) => html`<button role="radio" data-page-mode="${x.id}" aria-checked="${x.id === pageMode()}">${x.label}</button>`,
+                )}
+              </div>
+            </div>
+            <div class="field-row">
               <span>역본</span>
               ${translationButtons(mode)}
             </div>
@@ -179,7 +187,8 @@ export async function settingsView(root, _params, { isCurrent }) {
                 : ''}
             </p>
             <p class="muted small">BSB(Berean Standard Bible)는 현대 영어 번역입니다. 함께 보기를 고르면 절마다 아래에 그 역본을 작게 보여 줍니다
-              (예: 개역개정 아래에 새번역). 본문 화면 위에서도 바꿀 수 있고, 계획의 분량과 절 번호는 새번역을 따릅니다.</p>
+              (예: 개역개정 아래에 새번역). 본문 화면 위에서도 바꿀 수 있고, 계획의 분량과 절 번호는 새번역을 따릅니다.
+              넘기는 방식이 <b>위아래로</b>면 그날 분량을 이어서 내려 읽고, <b>장마다</b>면 한 장씩 보여 주어 옆으로 밀거나 아래 버튼으로 다음 장으로 넘깁니다.</p>
           </div>
         </section>
 
@@ -380,6 +389,10 @@ export async function settingsView(root, _params, { isCurrent }) {
     } else if (d.readingMain) {
       await setReadingMode({ main: d.readingMain });
       render();
+    } else if (d.pageMode) {
+      await setSetting('pageMode', d.pageMode);
+      render();
+      track('reading_setting_changed', { setting: 'page_mode', value: d.pageMode, surface: 'settings' });
     } else if (d.family) {
       await setSetting('fontFamily', d.family);
       applyReadingSettings();

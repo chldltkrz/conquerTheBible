@@ -211,6 +211,18 @@ const SHOT_LIST = [
     marks: [m('.tr-switch .segmented'), m('.tr-switch .companion-select'), m('.verse .alt', { nth: 1 })],
   },
   {
+    name: 'reader-paged',
+    hash: '#/read/2026-10/16',
+    prep: async (p) => {
+      await p.evaluate(async () => (await import('/js/db.js')).setSetting('pageMode', 'chapter'));
+      await p.reload();
+      await p.waitForSelector('.scripture:not([aria-busy])');
+      await settle(p);
+      await scrollTo(p, '#pager', 560);
+    },
+    marks: [m('#pager [data-page="1"]'), m('.pager-count', { pad: 6 })],
+  },
+  {
     name: 'reader-select',
     hash: '#/read/2026-10/16',
     prep: async (p) => {
@@ -465,8 +477,8 @@ const SHOT_LIST = [
   {
     name: 'settings-reading',
     hash: '#/settings',
-    prep: (p) => scrollTo(p, '#font-size', 160),
-    marks: [m('#font-size'), m('[data-family]', { box: true }), m('.segmented:has([data-reading-main])'), m('[data-reading-companion]'), m('#tts-voice'), m('[data-rate]'), m('[data-action="tts-test"]')],
+    prep: (p) => scrollTo(p, '#font-size', 24),
+    marks: [m('#font-size'), m('[data-family]', { box: true }), m('.segmented:has([data-page-mode])'), m('.segmented:has([data-reading-main])'), m('[data-reading-companion]'), m('#tts-voice'), m('[data-rate]'), m('[data-action="tts-test"]')],
   },
   {
     name: 'settings-reminder',
