@@ -34,6 +34,7 @@ import {
   createRoom,
   deleteRoom,
   isRoomActive,
+  joinImpact,
   joinProblem,
   joinRoom,
   leaveRoom,
@@ -115,6 +116,48 @@ test('밀린 분량을 다시 나눈 계획으로 만든 방도 처음 나눈 �
   const def = checkRoomPlan(roomPlanOf(getPlan(id)));
   assert.deepEqual(roomPlanTracks(def).map((t) => t.days.map((d) => d.segments)), original);
   assert.equal(plansForRoom(def).same?.id, id);
+});
+
+test('같은 계획 방에 들어가면 지워질 읽음 기록과 함께 없어질 기간을 미리 센다', { skip: noIndex }, async () => {
+  device();
+  const def = checkRoomPlan(roomPlanOf(getPlan(await lukePlan())));
+  assert.equal(joinImpact({ plan: def }), null, '같은 계획이 있으면 그대로 쓴다');
+  assert.equal(joinImpact({ plan: { kind: 'own' } }), null, '각자 계획 방');
+
+  // 방의 열흘 앞뒤로 20일씩 더 긴 계획. 방 기간 전에 5일, 방 기간에 2일(다른 범위) 읽었다
+  device();
+  const longStart = addDays(START, -20);
+  const longDays = Array.from({ length: 50 }, (_, i) => ({ segments: [{ b: 'psa', c: i + 1 }], chars: 100 }));
+  const longId = await savePlan({
+    start: longStart,
+    end: addDays(END, 20),
+    title: '시편 50일',
+    selection: { psa: longDays.map((_, i) => i + 1) },
+    splitChapters: true,
+    mode: 'sequential',
+    tracks: [{ title: '시편 50일', days: longDays }],
+  });
+  for (const day of [1, 2, 3, 4, 5, 21, 22]) await setRead(longId, day, true);
+
+  const impact = joinImpact({ plan: def });
+  assert.equal(impact.loses, true);
+  assert.deepEqual(impact.replaced.map((p) => p.title), ['시편 50일']);
+  assert.equal(impact.lostDays, 7);
+  assert.equal(impact.keptDays, 0);
+  assert.deepEqual(
+    impact.outside.map((o) => [toISO(o.start), toISO(o.end)]),
+    [
+      [toISO(longStart), toISO(addDays(START, -1))],
+      [toISO(addDays(END, 1)), toISO(addDays(END, 20))],
+    ],
+  );
+  assert.equal(impact.tracks.length, 1, '방의 계획을 나눠 둔다 (joinRoom에 넘긴다)');
+
+  // 겹치는 계획이 없으면 잃는 것이 없다
+  device();
+  const fresh = joinImpact({ plan: def });
+  assert.equal(fresh.loses, false);
+  assert.equal(fresh.replaced.length, 0);
 });
 
 test('틀린 계획 정의는 받지 않는다', { skip: noIndex }, () => {

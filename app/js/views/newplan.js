@@ -35,7 +35,6 @@ import {
   getPlan,
   listPlans,
   MAX_PLAN_DAYS,
-  partKey,
   planTrackDays,
   plansOverlapping,
   roomMemberships,
@@ -44,7 +43,7 @@ import {
 import { buildGroupPlan, buildParallelPlan, buildPlan } from '../planner.js';
 import { translationsFor } from '../prefs.js';
 import { confirmDialog, formatNumber, html, keepRanges, setHTML, toast } from '../ui.js';
-import { accountPrefix, dayDate, dayList, newPlanHref, periodLabel, startingPeriod } from './common.js';
+import { accountPrefix, dayDate, dayList, newPlanHref, outsideText, periodLabel, replaceSummary, startingPeriod } from './common.js';
 import { track } from '../analytics.js';
 import { resumeRoomCreate, roomCreatePending } from './roomsection.js';
 
@@ -203,44 +202,8 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     });
   };
 
-  /**
-   * 저장하면 읽음 기록이 어떻게 되는지 미리 센다 (db.savePlan과 같은 규칙: 같은 날짜에 같은 범위면 기록이 이어진다).
-   *   keptDays: 기록이 이어지는 날, missedDays: 오늘 전인데 안 읽은 분량이 남는 날(밀린 읽기),
-   *   missedByTrack: 묶음 이름 → 밀린 날 수, lostDays: 범위가 바뀌어 기록이 지워지는 날, pastDays: 오늘 전 날 수
-   */
-  const carrySummary = () => {
-    const { start, end } = period();
-    const oldRead = new Map(); // partKey → 그 날짜
-    for (const p of plansOverlapping(start, end)) {
-      for (const d of p.days) for (const part of d.parts) if (part.readAt) oldRead.set(partKey(d.date, part.segments), toISO(d.date));
-    }
-    const pastDays = Math.min(periodDays(), Math.max(0, daysBetween(start, now)));
-    const kept = new Set();
-    const keptDays = new Set();
-    const missedDays = new Set();
-    const missedByTrack = new Map();
-    for (const t of state.tracks) {
-      t.days.forEach((d, i) => {
-        if (!d.segments.length) return;
-        const key = partKey(addDays(start, i), d.segments);
-        if (oldRead.has(key)) {
-          kept.add(key);
-          keptDays.add(i);
-        } else if (i < pastDays) {
-          missedDays.add(i);
-          missedByTrack.set(t.title, (missedByTrack.get(t.title) ?? 0) + 1);
-        }
-      });
-    }
-    return {
-      isRead: (date, segments) => kept.has(partKey(date, segments)),
-      keptDays: keptDays.size,
-      missedDays: missedDays.size,
-      missedByTrack,
-      lostDays: new Set([...oldRead].filter(([key]) => !kept.has(key)).map(([, iso]) => iso)).size,
-      pastDays,
-    };
-  };
+  /** 저장하면 읽음 기록과 일정이 어떻게 되는지 미리 센다 (common.js replaceSummary) */
+  const carrySummary = () => replaceSummary({ ...period(), tracks: state.tracks }, now);
 
   /** 밀린 분량을 묶음별로: "(출애굽기 15일 치)" — 이어서 읽기면 "(15일 치)" */
   const missedText = (c) =>
@@ -732,12 +695,13 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
         carry.keptDays && `읽은 기록 ${carry.keptDays}일 치는 그대로 이어집니다.`,
         carry.missedDays && `안 읽은 지난 분량(${missedText(carry)})은 밀린 읽기로 들어갑니다.`,
         carry.lostDays && `범위가 바뀐 ${carry.lostDays}일의 읽음 기록은 지워집니다.`,
+        carry.outside.length && `이 기간 밖의 ${outsideText(carry.outside)} 일정도 함께 없어집니다.`,
       ].filter(Boolean);
       const ok = await confirmDialog({
         title: same && state.period === 'month' ? `${state.m}월 계획을 바꿀까요?` : '계획을 바꿀까요?',
         message: `${same ? `${what} 계획을 고친 범위로 바꿉니다.` : `기존 ${what} 계획은 지워집니다.`} ${results.join(' ')}`,
         confirmText: '바꾸기',
-        danger: !same || carry.lostDays > 0,
+        danger: !same || carry.lostDays > 0 || carry.outside.length > 0,
       });
       if (!ok) return;
     }

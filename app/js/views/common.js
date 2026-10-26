@@ -23,7 +23,9 @@ import {
   listAccounts,
   listPlans,
   movedDates,
+  partKey,
   planOn,
+  plansOverlapping,
   readDates,
   scheduledDates,
   setRead,
@@ -483,6 +485,60 @@ export function progressSection(plan, titleSuffix = '') {
     ${progressList(items)}
   </section>`;
 }
+
+// ── 계획 바꾸기 ────────────────────────────────────────────
+
+/**
+ * 지금 계정에 start–end 계획을 tracks로 저장하면(db.savePlan: 기간이 겹치는 계획은 지우고, 같은 날짜에 같은 범위를
+ * 읽은 기록은 잇는다) 읽음 기록과 일정이 어떻게 되는지 미리 센다. (새 계획 화면, 함께 읽기 방에 들어갈 때)
+ *   keptDays: 기록이 이어지는 날, missedDays: 오늘 전인데 안 읽은 분량이 남는 날(밀린 읽기),
+ *   missedByTrack: 묶음 이름 → 밀린 날 수, lostDays: 범위가 바뀌어 기록이 지워지는 날, pastDays: 오늘 전 날 수,
+ *   replaced: 지워지는 계획들, outside: 지워지는 계획에서 이 기간 밖이라 함께 없어지는 기간들 [{plan, start, end}]
+ */
+export function replaceSummary({ start, end, tracks }, now = today()) {
+  const replaced = plansOverlapping(start, end);
+  const oldRead = new Map(); // partKey → 그 날짜
+  for (const p of replaced) {
+    for (const d of p.days) for (const part of d.parts) if (part.readAt) oldRead.set(partKey(d.date, part.segments), toISO(d.date));
+  }
+  const pastDays = Math.min(daysBetween(start, end) + 1, Math.max(0, daysBetween(start, now)));
+  const kept = new Set();
+  const keptDays = new Set();
+  const missedDays = new Set();
+  const missedByTrack = new Map();
+  for (const t of tracks) {
+    t.days.forEach((d, i) => {
+      if (!d.segments.length) return;
+      const key = partKey(addDays(start, i), d.segments);
+      if (oldRead.has(key)) {
+        kept.add(key);
+        keptDays.add(i);
+      } else if (i < pastDays) {
+        missedDays.add(i);
+        missedByTrack.set(t.title, (missedByTrack.get(t.title) ?? 0) + 1);
+      }
+    });
+  }
+  const outside = replaced.flatMap((p) =>
+    [
+      compareDate(p.start, start) < 0 && { plan: p, start: p.start, end: addDays(start, -1) },
+      compareDate(p.end, end) > 0 && { plan: p, start: addDays(end, 1), end: p.end },
+    ].filter(Boolean),
+  );
+  return {
+    isRead: (date, segments) => kept.has(partKey(date, segments)),
+    keptDays: keptDays.size,
+    missedDays: missedDays.size,
+    missedByTrack,
+    lostDays: new Set([...oldRead].filter(([key]) => !kept.has(key)).map(([, iso]) => iso)).size,
+    pastDays,
+    replaced,
+    outside,
+  };
+}
+
+/** 지워지는 계획에서 함께 없어지는 기간들: "1월 1일 – 9월 30일, 11월 1일 – 12월 31일" */
+export const outsideText = (outside) => outside.map((o) => formatPeriod(o.start, o.end)).join(', ');
 
 // ── 밀린 분량 다시 나누기 ───────────────────────────────────
 

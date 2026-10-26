@@ -14,13 +14,14 @@ import {
   weekday,
   WEEKDAYS,
 } from '../dates.js';
-import { currentAccount, listAccounts, listPlans, planOn, roomMemberships } from '../db.js';
+import { createAccount, currentAccount, deleteAccount, listAccounts, listPlans, planOn, roomMemberships, switchAccount, syncInfo } from '../db.js';
 import {
   createRoom,
   deleteRoom,
   checkReading,
   isOwnRoom,
   isRoomActive,
+  joinImpact,
   joinProblem,
   joinRoom,
   leaveRoom,
@@ -41,9 +42,9 @@ import {
 } from '../rooms.js';
 import { normalizeCode } from '../sync.js';
 import { OLD_DEFAULT_NAME, randomName } from '../names.js';
-import { confirmDialog, copyText, createSheet, html, josa, setHTML, toast } from '../ui.js';
+import { choiceDialog, confirmDialog, copyText, createSheet, html, josa, setHTML, toast } from '../ui.js';
 import { track } from '../analytics.js';
-import { avatar, checkIcon, isMonthPlan, newPlanHref, periodLabel } from './common.js';
+import { avatar, checkIcon, isMonthPlan, newPlanHref, outsideText, periodLabel } from './common.js';
 import { renderQr } from './syncsection.js';
 
 export const roomIcon = html`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2.5 20a6.5 6.5 0 0 1 13 0M16 4.3a3.5 3.5 0 0 1 0 6.4M18.5 14.2a6.5 6.5 0 0 1 3 5.8" /></svg>`;
@@ -697,10 +698,22 @@ function planNote(found) {
   const { same, overlaps: list } = plansForRoom(found.plan);
   if (same) return html`이미 같은 계획(<b>${same.title}</b>)이 있어 그 계획을 그대로 이어 읽습니다.`;
   if (list.length) {
+    const impact = found.impact;
     return html`기간이 겹치는 ${list.map((p, i) => html`${i ? ', ' : ''}<b>${p.title}</b>(${periodLabel(p)})`)} 계획은
-      이 방의 계획으로 바뀝니다. 같은 날짜에 같은 범위를 읽은 기록은 이어집니다.`;
+      이 방의 계획으로 바뀝니다. ${impact?.loses
+        ? html`<b>${lossText(impact)}</b> 들어갈 때 한 번 더 묻습니다.`
+        : '같은 날짜에 같은 범위를 읽은 기록은 이어집니다.'}`;
   }
   return html`이 방의 계획이 새로 만들어집니다.`;
+}
+
+/** 방의 계획으로 바꾸면 사라지는 것: "읽은 기록 200일이 지워지고, 이 방 기간 밖의 … 일정도 함께 없어집니다." */
+function lossText(impact) {
+  const lost = impact.lostDays ? `읽은 기록 ${impact.lostDays}일이 지워` : '';
+  const outside = impact.outside.length ? `이 방 기간 밖의 ${outsideText(impact.outside)} 일정도 함께 없어집니다.` : '';
+  const kept = impact.keptDays ? ` 같은 날짜에 같은 범위를 읽은 ${impact.keptDays}일은 이어집니다.` : '';
+  if (lost && outside) return `${lost}지고, ${outside}${kept}`;
+  return `${lost ? `${lost}집니다.` : outside}${kept}`;
 }
 
 /**
@@ -786,6 +799,7 @@ export function openRoomJoin(prefill = '', { via = 'code', done = () => {} } = {
       return fail(form, problem);
     }
     found = room;
+    found.impact = joinImpact(room); // 들어가면 지금 계획이 어떻게 되는지 (방의 계획을 한 번만 나눈다)
     joinStep();
     dlg.querySelector('[name=member]').focus();
   };
@@ -794,21 +808,60 @@ export function openRoomJoin(prefill = '', { via = 'code', done = () => {} } = {
     const memberName = form.member.value.trim();
     if (!memberName) return fail(form, '방에서 보일 이름을 넣어 주세요.');
     if (found.members.some((x) => x.name === memberName)) return fail(form, `방에 이미 ${memberName}${josa(memberName, '이', '가')} 있습니다. 다른 이름을 써 주세요.`);
+    // 지금 계획의 읽음 기록이나 일정이 사라지면 들어가기 전에 묻는다: 새 계정으로 들어가거나, 계획을 바꾸고 들어가거나
+    const impact = found.impact;
+    let fresh = null; // 새로 만든 계정 {id, prev} (들어가지 못하면 지우고 원래 계정으로 돌아간다)
+    if (impact?.loses) {
+      const names = impact.replaced.map((p) => `'${p.title}'(${periodLabel(p, { year: true })})`).join(', ');
+      const choice = await choiceDialog({
+        title: '지금 계획을 바꾸고 들어갈까요?',
+        message: `${names} 계획이 이 방의 계획으로 바뀝니다. ${lossText(impact)}${syncInfo() ? ' 동기화된 다른 기기에서도 그렇게 바뀝니다.' : ''}`,
+        choices: [
+          { value: 'account', label: '새 계정으로 들어가기', detail: `지금 계획은 그대로 두고, "${memberName}" 계정을 새로 만들어 들어갑니다` },
+          { value: 'replace', label: '계획을 바꾸고 들어가기', detail: '이 계정의 계획을 방의 계획으로 바꿉니다', danger: true },
+        ],
+      });
+      track('room_join_replace_asked', { choice: choice ?? 'cancel', lost_days: impact.lostDays, outside: impact.outside.length > 0 });
+      if (!choice) {
+        form.querySelector('.btn-primary').disabled = false;
+        return;
+      }
+      if (choice === 'account') {
+        const prev = currentAccount().id;
+        try {
+          fresh = { id: await createAccount(memberName), prev };
+          await switchAccount(fresh.id);
+        } catch (err) {
+          if (fresh) await deleteAccount(fresh.id).catch(() => {});
+          return fail(form, `계정을 만들지 못했습니다: ${err.message}`);
+        }
+      }
+    }
     let result;
     try {
-      result = await joinRoom(found, memberName);
+      result = await joinRoom(found, memberName, { tracks: impact?.tracks });
     } catch (err) {
+      if (fresh) {
+        await switchAccount(fresh.prev).catch(() => {});
+        await deleteAccount(fresh.id).catch(() => {});
+      }
       track('room_join_failed', { reason: err.code ?? 'error', via });
       return fail(form, err.message);
     }
     track('room_joined', {
       result,
       via,
+      new_account: !!fresh,
       members: found.members.length + 1,
       ...(isOwnRoom(found.plan) ? { kind: 'own' } : { kind: 'same', plan_mode: found.plan.mode, plan_length: found.plan.length }),
     });
     dlg.close();
-    toast(result === 'saved' ? `${found.name} 방에 들어가 계획을 만들었습니다` : `${found.name} 방에 들어갔습니다`);
+    if (fresh) {
+      toast(`새 계정 ${memberName}${josa(memberName, '을', '를')} 만들어 ${found.name} 방에 들어갔습니다`);
+      window.dispatchEvent(new Event('account-changed')); // 새 계정으로 화면을 다시 그린다
+    } else {
+      toast(result === 'saved' ? `${found.name} 방에 들어가 계획을 만들었습니다` : `${found.name} 방에 들어갔습니다`);
+    }
     done();
     openRoomSheet(found.code, done);
   };

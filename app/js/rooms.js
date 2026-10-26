@@ -35,7 +35,7 @@ import {
 import { buildPlan } from './planner.js';
 import { normalizeCode } from './sync.js';
 import { OLD_DEFAULT_NAME } from './names.js';
-import { progressOf, readPercent } from './views/common.js';
+import { progressOf, readPercent, replaceSummary } from './views/common.js';
 
 export const MAX_MEMBERS = 30; // server/rooms.mjs와 같다
 export const ROOM_NAME_MAX = 30;
@@ -236,6 +236,19 @@ export function joinProblem(found, now = today()) {
     if (other) return `같은 기간에 ${other.name} 방에서 다른 계획을 읽고 있습니다. 그 방에서 나온 뒤 들어올 수 있습니다.`;
   }
   return null;
+}
+
+/**
+ * 같은 계획 방에 들어가면 지금 계정의 계획이 어떻게 되는지 (common.js replaceSummary에 tracks를 더해서).
+ * 이미 같은 계획이 있어 그대로 쓰거나 각자 계획 방이면 null.
+ * loses: 지워지는 읽음 기록이나 함께 없어지는 기간이 있는지 (있으면 들어가기 전에 한 번 더 묻는다)
+ * tracks: 방의 계획으로 저장할 묶음 (joinRoom에 넘기면 다시 나누지 않는다)
+ */
+export function joinImpact(found, now = today()) {
+  if (isOwnRoom(found.plan) || plansForRoom(found.plan).same) return null;
+  const tracks = roomPlanTracks(found.plan);
+  const summary = replaceSummary({ start: found.plan.start, end: found.plan.end, tracks }, now);
+  return { ...summary, tracks, loses: summary.lostDays > 0 || summary.outside.length > 0 };
 }
 
 // ── 날짜별 읽음 ────────────────────────────────────────────
@@ -493,10 +506,11 @@ export async function lookupRoom(input) {
 
 /**
  * 지금 계정으로 찾은 방에 들어간다. 같은 계획 방이면 같은 계획이 없을 때 방의 계획을 저장한다(겹치는 계획은
- * savePlan처럼 바뀐다). 각자 계획 방이면 계획은 그대로 둔다.
+ * savePlan처럼 바뀐다. 무엇이 사라지는지는 joinImpact로 미리 보고 묻는다). 각자 계획 방이면 계획은 그대로 둔다.
+ * tracks: joinImpact가 나눠 둔 방의 계획 (없으면 여기서 나눈다)
  * @returns {Promise<'same'|'saved'|'own'>} 있던 계획을 그대로 쓰는지, 방의 계획을 새로 저장했는지, 각자 계획 방인지
  */
-export async function joinRoom(found, memberName) {
+export async function joinRoom(found, memberName, { tracks = null } = {}) {
   const problem = joinProblem(found);
   if (problem) throw new RoomError('blocked', 0, problem);
   const acc = currentAccount();
@@ -514,7 +528,7 @@ export async function joinRoom(found, memberName) {
         selection: plan.selection,
         splitChapters: plan.splitChapters,
         mode: plan.mode,
-        tracks: roomPlanTracks(plan),
+        tracks: tracks ?? roomPlanTracks(plan),
       });
       result = 'saved';
     }
