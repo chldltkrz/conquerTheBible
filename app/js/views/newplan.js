@@ -51,8 +51,11 @@ import { resumeRoomCreate, roomCreatePending } from './roomsection.js';
 // 기간을 직접 정할 때 시작일부터 바로 고르는 길이
 const LENGTHS = [
   { label: '2주', end: (s) => addDays(s, 13) },
+  { label: '30일', end: (s) => addDays(s, 29) },
   { label: '40일', end: (s) => addDays(s, 39) },
   { label: '50일', end: (s) => addDays(s, 49) },
+  { label: '60일', end: (s) => addDays(s, 59) },
+  { label: '90일', end: (s) => addDays(s, 89) },
   { label: '100일', end: (s) => addDays(s, 99) },
   { label: '1년', end: (s) => addDays({ ...s, y: s.y + 1 }, -1) },
 ];
