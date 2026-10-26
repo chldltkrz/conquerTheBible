@@ -449,7 +449,9 @@ test/                 node:test 테스트
   nginx가 wasm도 gzip으로 압축해 보냅니다(658KB → 약 330KB).
 - 서버의 공통 nginx 헤더(`/etc/nginx/header.conf`)에는 `X-Robots-Tag: noindex, nofollow`가 있어 그대로 두면
   검색에 전혀 나오지 않습니다. 이 사이트의 server 블록에서 보안 헤더를 다시 붙여 이를 덮어씁니다(아래 [배포](#배포)).
-  배포한 뒤 `curl -sI https://delicious-manna.com/ | grep -i x-robots`가 아무것도 내놓지 않아야 합니다.
+  `http://`·`www.`에서 본 주소로 보내는(301) server 블록도 마찬가지입니다. 빠뜨리면 Search Console에
+  "Excluded by 'noindex' tag"로 나옵니다. 배포한 뒤 아래가 아무것도 내놓지 않아야 합니다.
+  `for u in http://delicious-manna.com/ https://www.delicious-manna.com/ https://delicious-manna.com/ https://delicious-manna.com/landing/; do curl -sI $u | grep -i x-robots; done`
 - 주소 `https://delicious-manna.com/`이 `index.html`(canonical, og:url, og:image, JSON-LD), `robots.txt`, `sitemap.xml`에
   적혀 있으므로 도메인을 바꾸면 함께 고칩니다.
 - 검색 등록: [Google Search Console](https://search.google.com/search-console)과
@@ -485,6 +487,10 @@ nginx 설정(`/etc/nginx/conf.d/delicious-manna.com.conf`)에는 검색 로봇�
 # server 블록 밖 (http 단계)
 limit_req_zone $binary_remote_addr zone=ctb_sync:10m rate=60r/m;
 limit_req_zone $binary_remote_addr zone=ctb_sync_new:10m rate=2r/m;
+
+# http(80)과 www.delicious-manna.com(443)에서 https://delicious-manna.com 으로 보내는 server 블록 안에도
+# add_header를 하나 이상 둔다 (그래야 header.conf의 X-Robots-Tag가 301 응답에 붙지 않는다)
+add_header X-Content-Type-Options "nosniff" always;
 
 # delicious-manna.com server 블록 안
 # header.conf의 X-Robots-Tag(noindex, nofollow)만 빼고 다시 붙인다. server에 add_header가 있으면 http 단계 것은 상속되지 않는다.
