@@ -185,6 +185,7 @@ main:focus-visible {
   z-index: 20;
   display: flex;
   justify-content: center;
+  gap: 8px;
   padding: 6px 8px calc(6px + var(--safe-b));
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   backdrop-filter: blur(14px);
@@ -198,7 +199,7 @@ main:focus-visible {
 
 .tabbar a {
   flex: 1;
-  max-width: 120px;
+  max-width: 160px;
   display: flex;
   flex-direction: column;
   align-items: center;
