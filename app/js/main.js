@@ -44,6 +44,19 @@ const routes = [
 
 let renderSeq = 0;
 
+const matchRoute = (hash) => routes.map((r) => ({ r, m: r.re.exec(hash) })).find((x) => x.m);
+
+/** 아래 메뉴: tab을 강조하고(주면), 달력 탭은 이번 달로 가게 한다 */
+function updateTabbar(tab) {
+  document.querySelectorAll('.tabbar a').forEach((a) => {
+    if (tab !== undefined) a.toggleAttribute('aria-current', a.dataset.tab === tab);
+    if (a.dataset.tab === 'month') {
+      const t = today();
+      a.href = `#/month/${ymKey(t.y, t.m)}`;
+    }
+  });
+}
+
 // 본문 화면은 오늘·묵상 메모 화면에서 열었으면 그 화면에 딸린 것으로 본다: 아래 메뉴는 그 탭을 강조하고 뒤로 버튼은 그 화면으로 간다.
 // 달력에서 열었거나 링크로 바로 열었으면 달력(본문 날짜의 달)이다. 본문 안에서 다른 날로 옮겨도 처음 화면을 기억한다.
 const READER_FROM = new Set(['today', 'notes']);
@@ -52,7 +65,7 @@ let lastScreen = null; // 본문이 아닌 마지막 화면 {hash, screen, tab}
 /** refresh: 다른 기기에서 받은 기록으로 지금 화면을 다시 그린다 (사용 통계·스크롤·소리로 듣기는 그대로) */
 async function route({ refresh = false } = {}) {
   const hash = location.hash || '#/';
-  const match = routes.map((r) => ({ r, m: r.re.exec(hash) })).find((x) => x.m);
+  const match = matchRoute(hash);
   if (!match) {
     location.replace('#/');
     return;
@@ -62,14 +75,7 @@ async function route({ refresh = false } = {}) {
   const reading = match.r.screen === 'reader';
   if (!reading) lastScreen = { hash, screen: match.r.screen, tab: match.r.tab };
   const from = reading && READER_FROM.has(lastScreen?.screen) ? lastScreen : null;
-  const tab = from?.tab ?? match.r.tab;
-  document.querySelectorAll('.tabbar a').forEach((a) => {
-    a.toggleAttribute('aria-current', a.dataset.tab === tab);
-    if (a.dataset.tab === 'month') {
-      const t = today();
-      a.href = `#/month/${ymKey(t.y, t.m)}`;
-    }
-  });
+  updateTabbar(from?.tab ?? match.r.tab);
   const params = match.m.slice(1).map((x) => (x == null ? undefined : Number(x)));
   // 화면들은 main에 이벤트 핸들러 속성(onclick 등)을 직접 단다. 이전 화면 것을 지운다.
   main.onclick = main.oninput = main.onchange = main.onsubmit = main.onkeydown = null;
@@ -209,7 +215,7 @@ async function boot() {
   window.addEventListener('db-paused', showPaused);
   window.addEventListener('pagehide', () => flushPendingSaves());
   window.addEventListener('sync-ended', () => {
-    toast('다른 기기에서 동기화를 꺼서 이 기기도 멈췄습니다. 기록은 그대로 있습니다');
+    toast('동기화가 꺼져 이 기기도 멈췄습니다 (다른 기기에서 껐거나, 400일 넘게 쓰지 않아 지워졌습니다). 기록은 그대로 있습니다');
     refreshView();
   });
   window.addEventListener('room-gone', (e) => {
@@ -234,7 +240,7 @@ async function boot() {
     if (to) changeAccount(Number(to.dataset.switchTo));
   });
 
-  // 자정을 넘겨 다시 앱으로 돌아오면 '오늘'을 새로 그린다.
+  // 자정을 넘겨 다시 앱으로 돌아오면 '오늘'을 보여 주는 화면(오늘·달력)만 새로 그린다. 다른 화면은 쓰던 것을 그대로 둔다.
   // 30분 넘게 숨겨졌다가 돌아오면 앱을 다시 연 것으로 센다(사용 통계).
   let shownDay = ymKey(today().y, today().m) + today().d;
   let hiddenAt = null;
@@ -253,7 +259,9 @@ async function boot() {
     const key = ymKey(t.y, t.m) + t.d;
     if (document.visibilityState === 'visible' && key !== shownDay) {
       shownDay = key;
-      route();
+      const screen = matchRoute(location.hash || '#/')?.r.screen;
+      if (screen === 'today' || screen === 'calendar') refreshView();
+      else updateTabbar();
     }
   });
 

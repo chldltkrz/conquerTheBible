@@ -190,6 +190,8 @@ set -a; . /etc/conquer-the-bible/sync.env; set +a; npm test
 - 입력을 멈추면 저장하는 묵상 메모는 앱을 떠나거나(화면이 가려지거나) 다른 창에 넘길 때 바로 저장합니다.
 - 설정 화면에서 `.sqlite` 파일로 내보내거나 가져올 수 있습니다. 내보낸 파일은 일반 SQLite 도구로 열 수 있습니다.
   내보낸 파일에는 동기화 코드가 들어가지 않습니다. 동기화 중에 백업을 가져오거나 모든 기록을 지우면 동기화된 다른 기기도 그렇게 바뀝니다.
+  함께 읽기 방의 멤버 열쇠는 들어가므로(가져와도 방에 그대로 남도록) 방에 들어가 있으면 설정 화면이 파일을 남에게 주지 말라고 알립니다.
+  계정이 하나도 없는 파일과 더 새 버전의 앱이 만든 파일(`user_version`이 이 앱이 아는 것보다 큰 파일)은 가져오지 않습니다.
 
 | 테이블 | 내용 |
 | --- | --- |
@@ -358,12 +360,15 @@ cd server && node -e "const k=require('web-push').generateVAPIDKeys(); console.l
 
 ## 사용 통계
 
-- 어떤 기능을 얼마나 쓰는지 [PostHog](https://posthog.com)로 익명 이벤트를 보냅니다 (앱 열기, 화면 이동, 읽음 표시, 계획 만들기 등).
+- 어떤 기능을 얼마나 쓰는지 [PostHog](https://posthog.com)로 이벤트를 보냅니다 (앱 열기, 화면 이동, 읽음 표시, 계획 만들기 등).
+  이름은 보내지 않지만 완전한 익명은 아닙니다: 기기마다 무작위 번호(`distinct_id`)를 만들어 이벤트를 묶고(`person_profiles: 'always'`),
+  PostHog는 기본으로 접속 IP와 그것으로 짐작한 대략의 지역을 기록합니다. IP를 남기지 않으려면 PostHog 프로젝트 설정에서
+  **Discard client IP data**를 켜세요.
   PostHog는 `app/vendor/posthog.js`(no-external 빌드)로 함께 배포되며, 실행 중에 추가 스크립트를 받아오지 않습니다.
 - 보내지 않는 것: 계정 이름, 계획 이름, 묵상 메모·구절 메모 내용, 절 본문, 검색어, 백업 파일 이름, 음성 이름, 동기화 코드,
   함께 읽기 방의 이름·초대 코드·멤버 이름.
   책 코드(`gen`, `psa` 등), 개수, 날짜 차이, 참/거짓, 기기 안에서 몇 번째 계정인지만 보냅니다.
-- 설정 화면의 "익명 사용 통계 보내기"를 끄면 아무것도 보내지 않습니다.
+- 설정 화면의 "사용 통계 보내기"를 끄면 아무것도 보내지 않고, 이벤트 속성도 계산하지 않습니다.
 - localhost, 사설 IP, `.test`·`.local` 같은 테스트 도메인(예: `ctb.test`)에서 열면 보내지 않고 브라우저 콘솔에 `[analytics]`로만 출력합니다 (콘솔 수준 "Verbose"에서 보임).
 - PostHog 프로젝트 키와 서버 주소는 `app/js/analytics.js` 맨 위의 `POSTHOG_KEY`, `POSTHOG_HOST`에 있습니다.
 
@@ -374,6 +379,7 @@ app/                  배포할 정적 사이트 (PWA)
   index.html, sw.js, manifest.webmanifest
   robots.txt, sitemap.xml, favicon.ico   검색 로봇용
   js/planner.js       분량 나누기 (DOM 없는 순수 모듈)
+  js/plancalc.js      분량 나누기를 Web Worker(js/planworker.js)에서 돌린다 (1년 계획도 화면이 멈추지 않게)
   js/db.js            SQLite 스키마와 질의, 동기화할 줄 모으기·받은 줄 넣기
   js/sync.js          기기 간 동기화: 서버와 주고받기, 언제 할지
   js/reminder.js      읽기 알림: 날마다 알릴 내용 계산, 푸시 구독

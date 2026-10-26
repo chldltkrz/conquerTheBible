@@ -29,6 +29,9 @@ import {
   saveVerseToday,
   deleteSavedVerse,
   listSavedVerses,
+  exportBackup,
+  importFile,
+  listAccounts,
 } from '../app/js/db.js';
 
 const initSqlJs = createRequire(import.meta.url)('sql.js');
@@ -457,4 +460,32 @@ test('v9: 에스겔서 15장을 7절(예전 끝)까지 읽던 구간을 8절까�
   ]);
   const sent = rows(db, "SELECT DISTINCT key FROM sync_outbox WHERE tbl = 'plan_days'").map(([k]) => JSON.parse(k).at(-1));
   assert.deepEqual(sent.sort(), [2, 3, 4]);
+});
+
+test('백업 가져오기: 새 버전의 앱이 만든 파일과 계정이 없는 파일은 거절하고 지금 기록을 그대로 둔다', async () => {
+  useMemoryDatabase(new SQL.Database(), SQL);
+  await createAccount('엄마');
+  const backup = exportBackup();
+  const names = listAccounts().map((a) => a.name);
+
+  const newer = new SQL.Database(backup);
+  newer.exec(`PRAGMA user_version = ${MIGRATIONS.length + 1}`);
+  await assert.rejects(importFile(newer.export()), /더 새 버전의 앱/);
+
+  const empty = new SQL.Database(backup);
+  empty.exec('PRAGMA foreign_keys = OFF; DELETE FROM accounts;');
+  await assert.rejects(importFile(empty.export()), /계정이 하나도 없습니다/);
+
+  await assert.rejects(importFile(new TextEncoder().encode('백업 아님')), /이 앱의 백업 파일이 아닙니다/);
+  assert.deepEqual(
+    listAccounts().map((a) => a.name),
+    names,
+    '거절하면 아무것도 바꾸지 않는다',
+  );
+
+  await importFile(backup);
+  assert.deepEqual(
+    listAccounts().map((a) => a.name),
+    names,
+  );
 });

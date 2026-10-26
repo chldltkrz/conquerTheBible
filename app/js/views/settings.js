@@ -285,6 +285,9 @@ export async function settingsView(root, _params, { isCurrent }) {
             ${syncInfo()
               ? html`<p class="muted small">동기화 중에는 백업을 가져오거나 모든 기록을 지우면 동기화된 다른 기기의 기록도 함께 바뀝니다.</p>`
               : ''}
+            ${roomMemberships().length
+              ? html`<p class="muted small">내보낸 파일에는 들어가 있는 함께 읽기 방의 멤버 열쇠도 담깁니다. 파일을 받은 사람이 방에서 내 이름으로 기록을 올릴 수 있으니 다른 사람에게 주지 마세요.</p>`
+              : ''}
             <div class="button-row">
               <button class="btn btn-ghost" data-action="export">내보내기 (.sqlite)</button>
               <label class="btn btn-ghost">
@@ -303,10 +306,10 @@ export async function settingsView(root, _params, { isCurrent }) {
           <h2 class="block-title">사용 통계</h2>
           <div class="card">
             <label class="field-row">
-              <span>익명 사용 통계 보내기</span>
+              <span>사용 통계 보내기</span>
               <input type="checkbox" id="analytics-opt-in" ${isOptedOut() ? '' : 'checked'} />
             </label>
-            <p class="muted small">어떤 기능을 얼마나 쓰는지 익명으로 모아 앱을 고치는 데 씁니다. 계정 이름, 계획 이름, 메모, 구절, 검색어는 보내지 않습니다.</p>
+            <p class="muted small">어떤 기능을 얼마나 쓰는지 모아 앱을 고치는 데 씁니다. 이 기기에서 만든 무작위 번호와 함께 보내며, 통계 서비스(PostHog)가 접속 주소(IP)로 대략의 지역을 남길 수 있습니다. 계정 이름, 계획 이름, 메모, 구절, 검색어는 보내지 않습니다.</p>
           </div>
         </section>
 
@@ -344,27 +347,32 @@ export async function settingsView(root, _params, { isCurrent }) {
     btn.disabled = true;
     const bar = root.querySelector('#dl-progress');
     bar.classList.remove('is-hidden');
-    const cache = await caches.open(DATA_CACHE);
-    const books = allBooks();
-    // 읽는 역본만 받는다 (함께 보기면 함께 보는 역본도)
-    const files = translationsFor().flatMap((tr) => books.map((b) => new URL(bookUrl(b.code, tr), location.href).href));
-    let done = 0;
-    let failed = 0;
-    for (const url of files) {
-      if (!(await cache.match(url))) {
-        try {
-          await cache.add(url);
-        } catch {
-          failed++;
+    try {
+      const cache = await caches.open(DATA_CACHE);
+      const books = allBooks();
+      // 읽는 역본만 받는다 (함께 보기면 함께 보는 역본도)
+      const files = translationsFor().flatMap((tr) => books.map((b) => new URL(bookUrl(b.code, tr), location.href).href));
+      let done = 0;
+      let failed = 0;
+      for (const url of files) {
+        if (!(await cache.match(url))) {
+          try {
+            await cache.add(url);
+          } catch {
+            failed++;
+          }
         }
+        done++;
+        bar.firstElementChild.style.width = `${Math.round((done / files.length) * 100)}%`;
       }
-      done++;
-      bar.firstElementChild.style.width = `${Math.round((done / files.length) * 100)}%`;
+      toast(failed ? `${failed}권을 받지 못했습니다. 인터넷 연결을 확인하세요.` : '성경 전체를 저장했습니다');
+      track('offline_download_completed', { total: files.length, failed });
+    } catch (err) {
+      toast(`저장하지 못했습니다: ${err.message}`); // 저장 공간을 열 수 없는 경우 등
+    } finally {
+      downloading = false; // 실패해도 다시 누를 수 있게
+      render();
     }
-    downloading = false;
-    toast(failed ? `${failed}권을 받지 못했습니다. 인터넷 연결을 확인하세요.` : '성경 전체를 저장했습니다');
-    render();
-    track('offline_download_completed', { total: files.length, failed });
   };
 
   const downloadBackup = () => {

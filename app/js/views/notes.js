@@ -1,7 +1,7 @@
 // 묵상 메모 화면: 날짜별 묵상 메모와 구절 메모를 최근에 쓴 순서로 모아 본다.
 
 import { formatDay, formatTimestamp } from '../dates.js';
-import { listNotes, planOn } from '../db.js';
+import { listNotes, planInfoOn } from '../db.js';
 import { html, keepRanges, setHTML } from '../ui.js';
 import { readHref } from './common.js';
 import { verseHead, verseRef } from './saved.js';
@@ -45,7 +45,7 @@ export async function notesView(root) {
                 <p class="note-text">${n.text}</p>
                 <div class="saved-foot">
                   <small>${formatTimestamp(n.updatedAt)} 저장</small>
-                  ${planOn(n.date) ? html`<a class="link" href="${readHref(n.date)}">본문 보기 ›</a>` : ''}
+                  ${planInfoOn(n.date) ? html`<a class="link" href="${readHref(n.date)}">본문 보기 ›</a>` : ''}
                 </div>
               </li>`
             : html`<li class="saved-item note-item">

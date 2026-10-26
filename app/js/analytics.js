@@ -1,9 +1,9 @@
-// 사용 통계: PostHog로 익명 이벤트를 보낸다.
+// 사용 통계: PostHog로 이벤트를 보낸다. 이 기기의 무작위 번호(PostHog distinct_id)로 묶이고, 이름 등 사용자가 쓴 글은 보내지 않는다.
 // 원칙: 분석 코드는 절대 앱 동작을 막거나 깨뜨리지 않는다. track()은 throw하지 않고, await할 필요도 없다.
 //       사용자가 입력한 글(계정 이름, 계획 이름, 메모, 검색어)과 본문 텍스트는 보내지 않는다.
 // 이 모듈은 Node 테스트에서도 import될 수 있으므로 최상위에서 window/location을 직접 쓰지 않는다.
 
-import { currentAccount, listAccounts, planOn } from './db.js';
+import { currentAccount, listAccounts, planInfoOn } from './db.js';
 import { today } from './dates.js';
 
 const POSTHOG_KEY = 'phc_sUgN9up8ToFEa9ThSWQ3LgHRw9Z7e3bAw6KJiGeVksqk'; // PostHog 프로젝트 API 키 (공개돼도 되는 키)
@@ -40,7 +40,10 @@ export const displayMode = () =>
 
 export const isOptedOut = () => safe(() => localStorage.getItem(OPT_OUT_KEY) === '1', false);
 
-/** 설정 화면의 "익명 사용 통계 보내기" 스위치 */
+/** 사용 통계를 모으는지. 끈 기기(와 Node 테스트)에서는 이벤트 속성을 계산하지 않는다 */
+export const analyticsOn = () => hasWindow && !isOptedOut();
+
+/** 설정 화면의 "사용 통계 보내기" 스위치 */
 export function setOptOut(optOut) {
   safe(() => (optOut ? localStorage.setItem(OPT_OUT_KEY, '1') : localStorage.removeItem(OPT_OUT_KEY)));
   if (optOut) {
@@ -56,7 +59,7 @@ export function setOptOut(optOut) {
 /** 모든 이벤트에 붙는 공통 속성. 보낼 때마다 새로 계산한다(계정·계획이 바뀌어도 맞도록). */
 function context() {
   return safe(() => {
-    const plan = planOn(today());
+    const plan = planInfoOn(today());
     const accounts = listAccounts();
     const me = currentAccount().id;
     return {
@@ -110,7 +113,7 @@ export function initAnalytics() {
  */
 export function track(name, props = {}) {
   safe(() => {
-    if (!hasWindow || isOptedOut()) return;
+    if (!analyticsOn()) return;
     const payload = { ...context(), ...(typeof props === 'function' ? props() : props) };
     if (isLocalHost()) {
       console.debug('[analytics]', name, payload);
@@ -124,6 +127,7 @@ export function track(name, props = {}) {
 /** 같은 key로는 이 기기에서 한 번만 보낸다 (읽음 취소 후 다시 표시해도 완독·연속 기록 이벤트가 겹치지 않도록) */
 export function trackOnce(key, name, props = {}) {
   safe(() => {
+    if (!analyticsOn()) return; // 끈 동안 달성한 것은 보낸 것으로 적지 않는다 (다시 켜면 보낼 수 있게)
     const sent = new Set(JSON.parse(localStorage.getItem(ONCE_KEY) ?? '[]'));
     if (sent.has(key)) return;
     sent.add(key);

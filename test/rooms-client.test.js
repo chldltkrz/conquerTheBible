@@ -121,8 +121,8 @@ test('밀린 분량을 다시 나눈 계획으로 만든 방도 처음 나눈 �
 test('같은 계획 방에 들어가면 지워질 읽음 기록과 함께 없어질 기간을 미리 센다', { skip: noIndex }, async () => {
   device();
   const def = checkRoomPlan(roomPlanOf(getPlan(await lukePlan())));
-  assert.equal(joinImpact({ plan: def }), null, '같은 계획이 있으면 그대로 쓴다');
-  assert.equal(joinImpact({ plan: { kind: 'own' } }), null, '각자 계획 방');
+  assert.equal(await joinImpact({ plan: def }), null, '같은 계획이 있으면 그대로 쓴다');
+  assert.equal(await joinImpact({ plan: { kind: 'own' } }), null, '각자 계획 방');
 
   // 방의 열흘 앞뒤로 20일씩 더 긴 계획. 방 기간 전에 5일, 방 기간에 2일(다른 범위) 읽었다
   device();
@@ -139,7 +139,7 @@ test('같은 계획 방에 들어가면 지워질 읽음 기록과 함께 없어
   });
   for (const day of [1, 2, 3, 4, 5, 21, 22]) await setRead(longId, day, true);
 
-  const impact = joinImpact({ plan: def });
+  const impact = await joinImpact({ plan: def });
   assert.equal(impact.loses, true);
   assert.deepEqual(impact.replaced.map((p) => p.title), ['시편 50일']);
   assert.equal(impact.lostDays, 7);
@@ -155,7 +155,7 @@ test('같은 계획 방에 들어가면 지워질 읽음 기록과 함께 없어
 
   // 겹치는 계획이 없으면 잃는 것이 없다
   device();
-  const fresh = joinImpact({ plan: def });
+  const fresh = await joinImpact({ plan: def });
   assert.equal(fresh.loses, false);
   assert.equal(fresh.replaced.length, 0);
 });

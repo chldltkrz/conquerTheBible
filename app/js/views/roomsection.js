@@ -14,7 +14,7 @@ import {
   weekday,
   WEEKDAYS,
 } from '../dates.js';
-import { createAccount, currentAccount, deleteAccount, listAccounts, listPlans, planOn, roomMemberships, switchAccount, syncInfo } from '../db.js';
+import { createAccount, currentAccount, deleteAccount, listAccounts, listPlans, planInfoOn, roomMemberships, switchAccount, syncInfo } from '../db.js';
 import {
   createRoom,
   deleteRoom,
@@ -693,7 +693,7 @@ export function openRoomCreate(plan = null, { done = () => {}, name = '', member
 function planNote(found) {
   if (isOwnRoom(found.plan)) {
     return html`각자 계획으로 읽는 방입니다. 내 계획은 바뀌지 않고, 그날 분량을 몇 퍼센트 읽었는지와 진도, 읽는 계획(이름·범위·기간)이 방에 보입니다.
-      ${planOn(today()) ? '' : html`<small class="notice-sub">오늘 읽는 계획이 없습니다. 들어간 뒤 계획을 만들면 그때부터 방에 올라갑니다.</small>`}`;
+      ${planInfoOn(today()) ? '' : html`<small class="notice-sub">오늘 읽는 계획이 없습니다. 들어간 뒤 계획을 만들면 그때부터 방에 올라갑니다.</small>`}`;
   }
   const { same, overlaps: list } = plansForRoom(found.plan);
   if (same) return html`이미 같은 계획(<b>${same.title}</b>)이 있어 그 계획을 그대로 이어 읽습니다.`;
@@ -798,8 +798,13 @@ export function openRoomJoin(prefill = '', { via = 'code', done = () => {} } = {
       track('room_join_failed', { reason: 'blocked', via });
       return fail(form, problem);
     }
+    try {
+      room.impact = await joinImpact(room); // 들어가면 지금 계획이 어떻게 되는지 (방의 계획을 한 번만, 화면과 따로 나눈다)
+    } catch (err) {
+      return fail(form, `방의 계획을 나누지 못했습니다: ${err.message}`);
+    }
+    if (!dlg.open) return; // 기다리는 사이 창을 닫았다
     found = room;
-    found.impact = joinImpact(room); // 들어가면 지금 계획이 어떻게 되는지 (방의 계획을 한 번만 나눈다)
     joinStep();
     dlg.querySelector('[name=member]').focus();
   };

@@ -704,6 +704,25 @@ export function planOn(date, account = accountId) {
   return row && loadPlan(row);
 }
 
+/** planOn과 같지만 날마다의 분량은 읽지 않는다 (계획이 있는지, 무슨 계획인지만 볼 때). 없으면 null */
+export function planInfoOn(date, account = accountId) {
+  const row = one('SELECT * FROM plans WHERE account_id = $a AND start_date <= $d AND end_date >= $d', {
+    $a: account,
+    $d: toISO(date),
+  });
+  return row && planFromRow(row);
+}
+
+/** 분량이 있는데 아직 읽음 표시하지 않은 묶음 수 (계획을 다 읽었는지 가볍게 알아볼 때) */
+export function unreadPartCount(planId) {
+  return one(
+    `SELECT COUNT(*) AS n FROM plan_days d
+       LEFT JOIN readings r ON r.plan_id = d.plan_id AND r.track = d.track AND r.day = d.day
+      WHERE d.plan_id = $id AND d.segments != '[]' AND r.read_at IS NULL`,
+    { $id: planId },
+  ).n;
+}
+
 /** id로 계획 전체. 없으면 null */
 export function getPlan(id) {
   const row = one('SELECT * FROM plans WHERE id = $id', { $id: id });
@@ -1292,16 +1311,37 @@ export async function importFile(bytes) {
   let incoming;
   try {
     incoming = new SQL.Database(bytes);
+    checkBackup(incoming);
+  } catch (err) {
+    incoming?.close();
+    throw err;
+  }
+  await replaceDatabase(incoming);
+}
+
+/** 가져올 백업을 살피고 이 버전의 형식으로 올린다. 쓸 수 없으면 까닭을 담은 예외를 던진다. */
+function checkBackup(incoming) {
+  const notBackup = (why) => new Error(`이 앱의 백업 파일이 아닙니다 (${why})`);
+  let version;
+  try {
     const tables = incoming.exec("SELECT name FROM sqlite_master WHERE type = 'table'")[0]?.values.flat() ?? [];
     for (const t of ['plans', 'plan_days', 'readings']) {
       if (!tables.includes(t)) throw new Error(`'${t}' 테이블이 없습니다`);
     }
+    version = incoming.exec('PRAGMA user_version')[0].values[0][0];
+  } catch (err) {
+    throw notBackup(err.message);
+  }
+  // 이 앱보다 새 버전이 만든 백업에는 모르는 표·열이 있을 수 있어, 그대로 쓰면 기록이 어긋난다
+  if (version > MIGRATIONS.length) {
+    throw new Error('더 새 버전의 앱에서 만든 백업입니다. 앱을 닫았다 다시 열어 새 버전으로 바꾼 뒤 가져오세요');
+  }
+  try {
     migrate(incoming);
   } catch (err) {
-    incoming?.close();
-    throw new Error(`이 앱의 백업 파일이 아닙니다 (${err.message})`);
+    throw notBackup(err.message);
   }
-  await replaceDatabase(incoming);
+  if (!incoming.exec('SELECT 1 FROM accounts LIMIT 1').length) throw notBackup('계정이 하나도 없습니다');
 }
 
 /** 모든 기록을 지운다. 동기화 중이면 동기화된 다른 기기들에서도 지워진다. */

@@ -7,7 +7,6 @@ import {
   chapterUnit,
   describeSelection,
   formatSegments,
-  getIndex,
   loadBook,
   PRESETS,
   presetBooks,
@@ -40,7 +39,7 @@ import {
   roomMemberships,
   savePlan,
 } from '../db.js';
-import { buildGroupPlan, buildParallelPlan, buildPlan } from '../planner.js';
+import { planInBackground } from '../plancalc.js';
 import { translationsFor } from '../prefs.js';
 import { confirmDialog, formatNumber, html, keepRanges, setHTML, toast } from '../ui.js';
 import { accountPrefix, dayDate, dayList, newPlanHref, outsideText, periodLabel, replaceSummary, startingPeriod } from './common.js';
@@ -93,7 +92,7 @@ const modeArt = (lanes) => html`<span class="mode-art" aria-hidden="true">
 </span>`;
 
 /** 주소: #/new (이번 달), #/new/2026-10 (그 달), #/new/2026-10-15/2026-11-23 (기간을 정해서) */
-export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
+export async function newPlanView(root, [y, m, d, y2, m2, d2], { isCurrent = () => true } = {}) {
   const now = today();
   // 주소에 기간이 없고(#/new) 이번 달이 비어 있으면, 달 중간에는 지난 날짜가 "밀림"으로 쌓이지 않게 오늘부터 시작한다.
   if (y == null && !plansOverlapping(monthStart(now.y, now.m), monthEnd(now.y, now.m)).length) {
@@ -162,6 +161,8 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     history.replaceState(null, '', newPlanHref(start, end));
   };
 
+  let computing = false; // 미리보기 분량을 나누는 중 (다음을 두 번 누르지 않도록)
+  let saving = false; // 저장 중 (두 번 눌러 계획을 두 번 저장하지 않도록)
   const isGroup = () => state.mode === 'group';
   /** 계획 전체에서 고른 장 {code: [장...]} (그룹으로 읽기면 모든 그룹을 합친 것) */
   const planSelection = () => selectionOf(isGroup() ? unionOf(state.groups) : state.sel);
@@ -684,7 +685,19 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     refreshAfterDateInput();
   };
 
-  const save = async () => {
+  const save = async (btn) => {
+    if (saving) return;
+    saving = true;
+    btn.disabled = true;
+    try {
+      await saveNow();
+    } finally {
+      saving = false;
+      btn.disabled = false; // 저장했으면 화면을 옮긴다: 묻는 창에서 그만두었거나 저장하지 못한 경우
+    }
+  };
+
+  const saveNow = async () => {
     const { start, end } = period();
     const overlaps = plansOverlapping(start, end);
     const same = overlaps.length === 1 && sameDate(overlaps[0].start, start) && sameDate(overlaps[0].end, end);
@@ -798,22 +811,39 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
         state.sel.clear();
       }
     } else if (d.action === 'preview') {
+      if (computing) return;
       const sel = planSelection();
       const chapters = selectionToChapters(sel);
       const days = periodDays();
       const opts = { splitChapters: state.split };
-      if (state.mode === 'parallel') {
-        state.tracks = buildParallelPlan(getIndex(), chapters, days, opts).map((t) => ({ title: book(t.b).name, days: t.days }));
-      } else if (isGroup()) {
-        // 빈 그룹은 빼고, 그룹 이름은 그룹에 든 범위로 짓는다 ("시편", "복음서", "이사야–예레미야")
-        const groups = filledGroups();
-        state.tracks = buildGroupPlan(getIndex(), groups.map(selectionToChapters), days, opts).map((days, i) => ({
-          title: describeSelection(groups[i]),
-          days,
-        }));
-      } else {
-        state.tracks = [{ title: '', days: buildPlan(getIndex(), chapters, days, opts) }];
+      // 1년 계획은 휴대폰에서 몇 초 걸리므로 화면과 따로 계산하고, 그동안 버튼에 "나누는 중"을 보여 준다
+      computing = true;
+      t.disabled = true;
+      t.textContent = '나누는 중…';
+      let tracks;
+      try {
+        if (state.mode === 'parallel') {
+          tracks = (await planInBackground('buildParallelPlan', chapters, days, opts)).map((x) => ({ title: book(x.b).name, days: x.days }));
+        } else if (isGroup()) {
+          // 빈 그룹은 빼고, 그룹 이름은 그룹에 든 범위로 짓는다 ("시편", "복음서", "이사야–예레미야")
+          const groups = filledGroups();
+          tracks = (await planInBackground('buildGroupPlan', groups.map(selectionToChapters), days, opts)).map((days, i) => ({
+            title: describeSelection(groups[i]),
+            days,
+          }));
+        } else {
+          tracks = [{ title: '', days: await planInBackground('buildPlan', chapters, days, opts) }];
+        }
+      } catch (err) {
+        toast(`분량을 나누지 못했습니다: ${err.message}`);
+        render();
+        return;
+      } finally {
+        computing = false;
       }
+      // 기다리는 사이 다른 화면으로 갔거나 범위를 바꿨으면(버튼이 다시 그려졌으면) 버린다
+      if (!isCurrent() || !t.isConnected) return;
+      state.tracks = tracks;
       keepUnchangedTracks();
       if (!state.titleEdited) {
         const names = state.tracks.map((t) => t.title);
@@ -828,7 +858,7 @@ export async function newPlanView(root, [y, m, d, y2, m2, d2]) {
     } else if (d.action === 'back') {
       state.step = 'select';
     } else if (d.action === 'save') {
-      return save();
+      return save(t);
     } else {
       return;
     }

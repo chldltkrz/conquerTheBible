@@ -33,6 +33,7 @@ import {
   saveRoomMembership,
 } from './db.js';
 import { buildPlan } from './planner.js';
+import { planInBackground } from './plancalc.js';
 import { normalizeCode } from './sync.js';
 import { OLD_DEFAULT_NAME } from './names.js';
 import { progressOf, readPercent, replaceSummary } from './views/common.js';
@@ -238,15 +239,26 @@ export function joinProblem(found, now = today()) {
   return null;
 }
 
+/** roomPlanTracks를 화면이 멈추지 않게 (1년 계획은 휴대폰에서 몇 초 걸린다. plancalc.js) */
+async function roomPlanTracksInBackground(plan) {
+  const opts = { splitChapters: plan.splitChapters };
+  return Promise.all(
+    plan.tracks.map(async (t) => ({
+      title: t.title,
+      days: await planInBackground('buildPlan', selectionToChapters(t.selection), plan.length, opts),
+    })),
+  );
+}
+
 /**
  * 같은 계획 방에 들어가면 지금 계정의 계획이 어떻게 되는지 (common.js replaceSummary에 tracks를 더해서).
  * 이미 같은 계획이 있어 그대로 쓰거나 각자 계획 방이면 null.
  * loses: 지워지는 읽음 기록이나 함께 없어지는 기간이 있는지 (있으면 들어가기 전에 한 번 더 묻는다)
  * tracks: 방의 계획으로 저장할 묶음 (joinRoom에 넘기면 다시 나누지 않는다)
  */
-export function joinImpact(found, now = today()) {
+export async function joinImpact(found, now = today()) {
   if (isOwnRoom(found.plan) || plansForRoom(found.plan).same) return null;
-  const tracks = roomPlanTracks(found.plan);
+  const tracks = await roomPlanTracksInBackground(found.plan);
   const summary = replaceSummary({ start: found.plan.start, end: found.plan.end, tracks }, now);
   return { ...summary, tracks, loses: summary.lostDays > 0 || summary.outside.length > 0 };
 }
@@ -588,17 +600,20 @@ export async function deleteRoom(m) {
 
 // ── 화면에 보여 줄 것 ──────────────────────────────────────
 
-const schedules = new WeakMap(); // 방 소식 → 방의 계획에서 분량이 있는 날짜들 (소식을 받을 때마다 한 번 계산한다)
+// 방의 계획 → 분량이 있는 날짜들. 방 소식은 1분마다 새 객체로 오므로 계획 내용으로 기억한다 (계획마다 한 번만 나눈다)
+const schedules = new Map();
 
 /** 방의 계획에서 분량이 있는 날짜들 {'2026-10-22', …} */
 function readingDates(room) {
-  let dates = schedules.get(room);
+  const key = JSON.stringify(room.plan);
+  let dates = schedules.get(key);
   if (!dates) {
     dates = new Set();
     for (const t of roomPlanTracks(room.plan)) {
       t.days.forEach((d, i) => d.segments.length && dates.add(toISO(addDays(room.plan.start, i))));
     }
-    schedules.set(room, dates);
+    if (schedules.size >= 20) schedules.delete(schedules.keys().next().value); // 들어간 방은 몇 개뿐이다
+    schedules.set(key, dates);
   }
   return dates;
 }

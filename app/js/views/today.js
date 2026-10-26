@@ -14,7 +14,7 @@ import {
   today,
   ymKey,
 } from '../dates.js';
-import { currentAccount, listAccounts, listPlans, planOn, plansOverlapping, rebalancePlan, saveVerseToday } from '../db.js';
+import { currentAccount, listAccounts, listPlans, planInfoOn, planOn, plansOverlapping, rebalancePlan, saveVerseToday } from '../db.js';
 import { confirmDialog, html, keepRanges, setHTML, formatNumber, toast } from '../ui.js';
 import { track } from '../analytics.js';
 import { dailyVerseRef, loadPassage, passageRef, passageText } from '../verses.js';
@@ -122,7 +122,7 @@ export async function todayView(root) {
     let nextCard = '';
     if (plan && daysBetween(now, plan.end) < 7) {
       const start = addDays(plan.end, 1);
-      if (!planOn(start)) {
+      if (!planInfoOn(start)) {
         const monthly = isMonthPlan(plan);
         const end = monthly ? monthEnd(start.y, start.m) : addDays(start, plan.length - 1);
         nextCard = html`<a class="card card-link" href="${newPlanHref(start, end)}">

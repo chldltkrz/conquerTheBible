@@ -30,12 +30,13 @@ import {
   scheduledDates,
   setRead,
   switchAccount,
+  unreadPartCount,
 } from '../db.js';
 import { html, josa, keepRanges, setHTML, toast } from '../ui.js';
 import { openShareSheet } from './cardsheet.js';
 import { rebalanceTrack } from '../planner.js';
 import { READING_TRANSLATIONS, readingMode } from '../prefs.js';
-import { track, trackOnce } from '../analytics.js';
+import { analyticsOn, track, trackOnce } from '../analytics.js';
 
 /** 본문 화면 주소. track을 주면 그 책 부분으로 바로 내려간다. */
 export const readHref = ({ y, m, d }, track) => `#/read/${ymKey(y, m)}/${d}${track == null ? '' : `/${track}`}`;
@@ -366,7 +367,6 @@ export function streakStats(now = today()) {
 /** 연속 읽기 목표 (사용 통계의 streak_milestone과 자세히 보기의 다음 목표) */
 export const STREAK_MILESTONES = [3, 7, 14, 21, 30, 50, 100, 200, 365];
 
-/** 진행 상황: 다 읽은 날 수와, 읽은 분량(병렬이면 책마다 읽은 것까지)의 비율 */
 /** 묶음(그날 한 책·그룹) 하나를 어디까지 읽었는지 0~1. 읽음 표시했으면 1, 기록이 없으면 0 */
 export function partRatio(part) {
   if (part.readAt) return 1;
@@ -384,6 +384,7 @@ export function readPercent(entry, parts = entry.parts) {
   return total ? Math.min(99, Math.floor((done / total) * 100)) : 0;
 }
 
+/** 진행 상황: 다 읽은 날 수와, 읽은 분량(병렬이면 책마다 읽은 것까지)의 비율 */
 export function progressOf(plan) {
   const reading = plan.days.filter((d) => d.segments.length);
   const readChars = plan.days.reduce(
@@ -626,10 +627,11 @@ export function openedProps(now = today()) {
   };
 }
 
-/** 읽음 표시 직전 상태 (완독·연속 기록 달성을 알아내려고) */
+/** 읽음 표시 직전 상태 (완독·연속 기록 달성을 알아내려고). 사용 통계를 끈 기기에서는 null */
 export function readSnapshot(planId) {
+  if (!analyticsOn()) return null;
   try {
-    return { plan: getPlan(planId), streak: readingStreak(today()) };
+    return { unread: unreadPartCount(planId), streak: readingStreak(today()) };
   } catch {
     return null;
   }
@@ -637,6 +639,7 @@ export function readSnapshot(planId) {
 
 /** 읽음 표시를 바꾼 뒤 부른다: day_marked_read / day_unmarked_read, plan_completed, streak_milestone */
 export function trackReadChange(snap, { planId, day, track: trackNo = null, read, surface, extra = {} }) {
+  if (!analyticsOn()) return;
   try {
     const plan = getPlan(planId);
     if (!plan) return;
@@ -652,8 +655,7 @@ export function trackReadChange(snap, { planId, day, track: trackNo = null, read
       plan_progress_pct: after.percent,
       ...extra,
     });
-    const before = snap?.plan && progressOf(snap.plan);
-    if (before && after.total && after.done === after.total && before.done < before.total) {
+    if (snap?.unread > 0 && after.total && after.done === after.total) {
       // createdAt까지 넣는 이유: 기록을 모두 지우면 계획 id가 1부터 다시 시작한다
       trackOnce(`plan_completed:${plan.id}:${plan.createdAt}`, 'plan_completed', {
         plan_mode: plan.mode,

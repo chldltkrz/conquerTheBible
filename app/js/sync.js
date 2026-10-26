@@ -3,7 +3,7 @@
 //
 // 언제: 앱을 열 때, 기록을 바꾸고 잠시 뒤, 앱으로 돌아올 때와 떠날 때, 인터넷이 다시 될 때, 켜 둔 동안 1분마다.
 // window에 알리는 것: 'sync-status'(상태가 바뀜), 'sync-applied'(다른 기기의 기록을 받음),
-//                    'sync-ended'(다른 기기에서 동기화를 지워 이 기기도 멈춤)
+//                    'sync-ended'(다른 기기에서 동기화를 지웠거나 오래 쓰지 않아 서버가 지워 이 기기도 멈춤)
 // 이 모듈은 Node 테스트에서도 import되므로 최상위에서 window/document를 직접 쓰지 않는다.
 
 import {
@@ -207,7 +207,7 @@ async function exchange() {
 
 async function handleError(err) {
   if (err.code === 'no_space') {
-    // 다른 기기에서 "모든 기기에서 끄기"를 했다. 이 기기도 멈추되 기록은 남긴다.
+    // 다른 기기에서 "모든 기기에서 끄기"를 했거나, 400일 동안 아무 기기도 오지 않아 서버가 지웠다. 이 기기도 멈추되 기록은 남긴다.
     await syncStop();
     setStatus('off');
     notify('sync-ended');
