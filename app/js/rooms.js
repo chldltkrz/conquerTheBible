@@ -34,6 +34,7 @@ import {
 } from './db.js';
 import { buildPlan } from './planner.js';
 import { normalizeCode } from './sync.js';
+import { OLD_DEFAULT_NAME } from './names.js';
 import { progressOf, readPercent } from './views/common.js';
 
 export const MAX_MEMBERS = 30; // server/rooms.mjs와 같다
@@ -78,6 +79,7 @@ const MESSAGES = {
   no_member: '이미 방에서 나왔습니다.',
   not_owner: '방장만 할 수 있습니다.',
   bad_name: `이름을 확인해 주세요 (${MEMBER_NAME_MAX}자까지).`,
+  name_taken: '방에 이미 같은 이름이 있습니다. 다른 이름을 써 주세요.',
   bad_plan: '이 방의 계획을 읽지 못했습니다. 앱을 새로 고친 뒤 다시 해 주세요.',
   offline: '인터넷에 연결되어 있지 않습니다.',
   busy: '요청이 너무 많습니다. 잠시 뒤에 다시 해 주세요.',
@@ -390,10 +392,47 @@ export function uploadRooms() {
   return uploading;
 }
 
+// ── 방에서 보일 내 이름 ────────────────────────────────────
+// 방 이름(memberName)은 들어갈 때 정하고 계정 이름과 따로 둔다. 예전에는 기본 계정이 모두 '나'라서 '나'로 들어간 사람이 많다.
+
+/** 방에서 그 이름을 쓸 수 있는지: 같은 방의 다른 사람이 쓰고 있지 않으면 true (방 소식을 아직 못 받았으면 true) */
+const nameFree = (m, name) => !(roomData(m.code)?.room?.members ?? []).some((x) => x.id !== m.memberId && x.name === name);
+
+/** 방에서 보일 내 이름을 바꾼다 (방 창의 "내 이름 바꾸기"). 같은 방에 그 이름이 있으면 RoomError */
+export async function renameInRoom(m, name) {
+  if (!nameFree(m, name)) throw new RoomError('name_taken');
+  await saveRoomMembership({ ...m, memberName: name });
+  await uploadRooms();
+}
+
+/**
+ * 계정 이름을 바꿨을 때: 방에서 계정 이름(oldName)이나 예전 기본 이름 '나'를 그대로 쓰던 방은 새 이름으로 바꾼다.
+ * 방에서 따로 지은 이름은 그대로 두고, 같은 방에 새 이름을 쓰는 사람이 있으면 그 방도 그대로 둔다. 바꾼 방 수를 돌려준다.
+ */
+export async function followAccountRename(accountId, oldName, newName) {
+  let changed = 0;
+  for (const m of roomMemberships(accountId)) {
+    if (m.memberName === newName || (m.memberName !== oldName && m.memberName !== OLD_DEFAULT_NAME) || !nameFree(m, newName)) continue;
+    await saveRoomMembership({ ...m, memberName: newName });
+    changed++;
+  }
+  if (changed) uploadRooms();
+  return changed;
+}
+
+/** 방에서 예전 기본 이름 '나'를 쓰는데 계정 이름은 이미 바꿨으면 방 이름도 계정 이름으로 (기기를 열 때. 테스트에서도 쓴다) */
+export async function adoptAccountNames() {
+  if (isPaused()) return;
+  for (const acc of listAccounts()) {
+    if (acc.name !== OLD_DEFAULT_NAME) await followAccountRename(acc.id, OLD_DEFAULT_NAME, acc.name);
+  }
+}
+
 let uploadTimer = null;
 
 /** main.js의 boot()에서 데이터베이스를 연 뒤 한 번 부른다 */
 export function initRooms() {
+  adoptAccountNames().catch((err) => console.warn('[rooms]', err));
   onWrite(() => {
     clearTimeout(uploadTimer);
     uploadTimer = setTimeout(uploadRooms, UPLOAD_DELAY);

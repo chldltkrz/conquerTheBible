@@ -18,7 +18,7 @@ import {
   syncInfo,
 } from '../db.js';
 import { FONT_SIZE, PAGE_MODES, applyReadingSettings, pageMode, readingMode, setReadingMode, translationsFor } from '../prefs.js';
-import { confirmDialog, html, setHTML, toast } from '../ui.js';
+import { confirmDialog, html, josa, setHTML, toast } from '../ui.js';
 import { avatar, companionSelect, isMonthPlan, periodLabel, translationButtons } from './common.js';
 import { koreanVoices, pickVoice, player, RATES, voicesReady } from '../tts.js';
 import { rateLabel, speakerIcon } from './listen.js';
@@ -27,7 +27,7 @@ import { handleSyncAction, syncSection } from './syncsection.js';
 import { handleReminderAction, handleReminderChange, reminderSection } from './remindersection.js';
 import { openExportSheet } from './exportsheet.js';
 import { handleRoomAction, openRoomSheet, roomSection } from './roomsection.js';
-import { leaveAccountRooms } from '../rooms.js';
+import { followAccountRename, leaveAccountRooms } from '../rooms.js';
 import { chosenTheme, currentTheme, setTheme } from '../theme.js';
 
 const THEMES = [
@@ -509,8 +509,11 @@ export async function settingsView(root, _params, { isCurrent }) {
         e.target.value = listAccounts().find((a) => a.id === id).name;
         return;
       }
+      const old = listAccounts().find((a) => a.id === id).name;
       await renameAccount(id, name);
-      toast('계정 이름을 바꿨습니다');
+      // 함께 읽기 방에서 계정 이름(또는 예전 기본 이름 '나')을 그대로 쓰던 방은 방 이름도 바꾼다
+      const rooms = await followAccountRename(id, old, name);
+      toast(rooms ? `계정 이름을 바꿨습니다. 함께 읽기 방 ${rooms}곳에서도 ${name}${josa(name, '으로', '로')} 보입니다` : '계정 이름을 바꿨습니다');
       render();
       return;
     }

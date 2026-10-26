@@ -32,6 +32,7 @@ import {
   refreshRoom,
   refreshRooms,
   removeRoomMember,
+  renameInRoom,
   ROOM_NAME_MAX,
   roomData,
   roomLink,
@@ -87,8 +88,8 @@ function memberChips(members) {
   return html`<span class="room-chips">
     ${members.slice(0, CHIP_MAX).map((x) => {
       const state = dayState(x.pct);
-      return html`<span class="room-chip is-${state} ${x.me ? 'is-me' : ''}" title="${x.name} · ${CHIP_LABEL[state]}">
-        ${chipMark(state, x.pct)}<span>${x.me ? '나' : x.name}</span>
+      return html`<span class="room-chip is-${state} ${x.me ? 'is-me' : ''}" title="${x.name}${x.me ? '(나)' : ''} · ${CHIP_LABEL[state]}">
+        ${chipMark(state, x.pct)}<span>${x.name}</span>
       </span>`;
     })}
     ${more > 0 ? html`<span class="room-chip is-more">외 ${more}명</span>` : ''}
@@ -328,6 +329,7 @@ export function openRoomSheet(code, changed = () => {}) {
             : '방 사람들에게는 이 방에서 쓰는 이름과 날짜별 읽음, 계획 진도만 보입니다.'}
             묵상 메모와 저장한 구절, 다른 계획은 보이지 않습니다. 한 방에는 ${MAX_MEMBERS}명까지 들어올 수 있습니다.</p>
           <div class="room-leave">
+            <button class="link" data-room-rename>내 이름 바꾸기</button>
             <button class="link danger" data-room-leave>방에서 나가기</button>
             ${owner ? html`<button class="link danger" data-room-delete>방 없애기</button>` : ''}
           </div>
@@ -403,6 +405,7 @@ export function openRoomSheet(code, changed = () => {}) {
     const m = find();
     if (!m) return;
     if (e.target.closest('[data-room-invite]')) return openInviteDialog(m);
+    if (e.target.closest('[data-room-rename]')) return openRenameDialog(m, render);
     if (e.target.closest('[data-room-leave]')) return leave(m);
     if (e.target.closest('[data-room-delete]')) return remove(m);
     const k = e.target.closest('[data-room-kick]');
@@ -426,6 +429,52 @@ export function openRoomSheet(code, changed = () => {}) {
   dlg.showModal();
   refreshRoom(first);
   track('room_opened', { members: roomData(code)?.room?.members.length ?? null });
+}
+
+/** 방에서 보일 내 이름을 바꾸는 창 (이 방에서만. 계정 이름은 그대로) */
+function openRenameDialog(m, done) {
+  const dlg = document.createElement('dialog');
+  dlg.className = 'dialog room-form';
+  setHTML(
+    dlg,
+    html`<form>
+      <h2>${m.name} 방에서 보일 내 이름</h2>
+      <p class="muted small">이 방 사람들에게 보이는 이름입니다. 계정 이름은 그대로 둡니다.</p>
+      <label class="field">
+        <span>내 이름</span>
+        <input name="member" value="${m.memberName}" maxlength="${MEMBER_NAME_MAX}" required autocomplete="off" />
+      </label>
+      <p class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" data-close>취소</button>
+        <button class="btn btn-primary">바꾸기</button>
+      </div>
+    </form>`,
+  );
+  const form = dlg.querySelector('form');
+  const error = dlg.querySelector('.form-error');
+  dlg.addEventListener('click', (e) => e.target.closest('[data-close]') && dlg.close());
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = form.member.value.trim();
+    if (!name) return;
+    if (name === m.memberName) return dlg.close();
+    try {
+      await renameInRoom(m, name);
+    } catch (err) {
+      error.textContent = err.message;
+      error.hidden = false;
+      return;
+    }
+    track('room_member_renamed');
+    toast(`이 방에서 ${name}${josa(name, '으로', '로')} 보입니다`);
+    dlg.close();
+    done();
+  });
+  dlg.addEventListener('close', () => dlg.remove());
+  document.body.append(dlg);
+  dlg.showModal();
+  form.member.select();
 }
 
 // ── 초대하기 ───────────────────────────────────────────────

@@ -9,7 +9,9 @@ import { getIndex, selectionToChapters, useIndex } from '../app/js/bible.js';
 import { addDays, today, toISO } from '../app/js/dates.js';
 import {
   createAccount,
+  currentAccount,
   getPlan,
+  renameAccount,
   listPlans,
   planOn,
   planTrackDays,
@@ -25,6 +27,7 @@ import {
 } from '../app/js/db.js';
 import { buildGroupPlan, buildPlan } from '../app/js/planner.js';
 import {
+  adoptAccountNames,
   checkReading,
   checkRoomPlan,
   configureRooms,
@@ -39,6 +42,8 @@ import {
   plansForRoom,
   refreshRooms,
   removeRoomMember,
+  renameInRoom,
+  followAccountRename,
   roomData,
   roomMembers,
   roomPlanOf,
@@ -177,6 +182,25 @@ test('각자 계획 방: 계획 정의는 {kind: "own"}뿐이고, 기간 없이 
   assert.equal(same.kind, 'same');
   assert.equal(Object.keys(statusFor(same).days).length, 10);
   assert.equal('reading' in statusFor(same), false, '같은 계획 방은 계획을 올리지 않는다');
+});
+
+test('방에서 보일 내 이름: 계정 이름이나 예전 기본 이름 "나"를 쓰던 방은 계정 이름을 따라가고, 따로 지은 이름은 그대로', { skip: noIndex }, async () => {
+  device();
+  const me = currentAccount().id;
+  const join = (code, memberName) =>
+    saveRoomMembership({ accountId: me, code, memberId: code.slice(0, 4), memberKey: 'K', name: code, memberName, kind: 'own', start: today() });
+  await renameAccount(me, '나');
+  await join('AAAA-ROOM-0001', '나'); // 예전에 '나'로 들어간 방
+  await join('BBBB-ROOM-0002', '김집사'); // 방에서 따로 지은 이름
+  // 계정 이름을 이미 바꿔 두었으면 기기를 열 때 '나'인 방만 계정 이름으로
+  await renameAccount(me, '으으');
+  await adoptAccountNames();
+  const names = () => Object.fromEntries(roomMemberships().map((m) => [m.code, m.memberName]));
+  assert.deepEqual(names(), { 'AAAA-ROOM-0001': '으으', 'BBBB-ROOM-0002': '김집사' });
+  // 계정 이름을 바꾸면 그 이름을 쓰던 방도 바뀐다
+  await renameAccount(me, '기쁜 수달');
+  assert.equal(await followAccountRename(me, '으으', '기쁜 수달'), 1);
+  assert.deepEqual(names(), { 'AAAA-ROOM-0001': '기쁜 수달', 'BBBB-ROOM-0002': '김집사' });
 });
 
 // ── 서버와 주고받기 ────────────────────────────────────────
@@ -468,6 +492,13 @@ t('각자 계획 방: 들어와도 계획은 그대로이고, 서로 그날 읽�
     ],
   );
   assert.deepEqual(roomTally(members), { reading: 2, read: 2 }, '오늘 분량이 없는 사람은 세지 않는다');
+  // 방에서 보일 내 이름은 같은 방의 다른 사람과 겹치지 않게만 바꾼다. 계정 이름을 바꿔도 그 방에 같은 이름이 있으면 그대로
+  await assert.rejects(renameInRoom(m, '엄마'), { code: 'name_taken' });
+  assert.equal(await followAccountRename(m.accountId, '김집사', '엄마'), 0);
+  await renameInRoom(m, '김권사');
+  assert.equal(roomMemberships()[0].memberName, '김권사');
+  await refreshRooms();
+  assert.equal(roomData(code).room.members.find((x) => x.id === m.memberId).name, '김권사', '서버에도 올라갔다');
   // 멤버를 누르면 보이는 지금 읽는 계획. 엄마는 오늘 사랑구역 방의 누가복음을 읽는다(시편은 그 뒤에 시작). 이웃은 계획이 없다
   assert.deepEqual(
     members.map((x) => checkReading(x.reading) && [checkReading(x.reading).title, checkReading(x.reading).range]),

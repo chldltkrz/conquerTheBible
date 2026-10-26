@@ -644,7 +644,7 @@ const SHOT_LIST = [
       await openRoomSheet(p);
       await scrollTo(p, '[data-room-invite]', 420);
     },
-    marks: [m('[data-room-invite]'), m('[data-room-leave]')],
+    marks: [m('[data-room-invite]'), m('[data-room-rename]'), m('[data-room-leave]')],
   },
   {
     name: 'room-settings',
