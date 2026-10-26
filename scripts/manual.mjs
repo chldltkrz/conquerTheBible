@@ -16,7 +16,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { buildDemo, NOW_ISO } from './lib/manual-demo.mjs';
-import { launchBrowser, openDemo, phonePage, ROOM_CODE, settle, shoot, startAppServer, SYNC_CODE } from './lib/manual-env.mjs';
+import {
+  click,
+  deviceStubs,
+  joinDemoRoom,
+  launchBrowser,
+  openDemo,
+  phonePage,
+  ROOM_CODE,
+  scrollTo,
+  settle,
+  shoot,
+  startAppServer,
+  SYNC_CODE,
+} from './lib/manual-env.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const WORK = path.join(ROOT, '.cache/manual');
@@ -26,44 +39,11 @@ const OUT = path.join(ROOT, 'app/docs/user-manual.pdf');
 
 // ── 화면에서 하는 일 ──────────────────────────────────────
 
-async function click(page, sel, text) {
-  const loc = text ? page.locator(sel, { hasText: text }).first() : page.locator(sel).first();
-  await loc.click();
-  await settle(page, 450);
-}
-
-/** sel이 화면 위에서 offset(px) 아래에 오도록 스크롤한다. 열린 창이 있으면 창 안을 스크롤한다 */
-async function scrollTo(page, sel, offset = 90) {
-  await page.evaluate(
-    ([sel, offset]) => {
-      const el = document.querySelector(sel);
-      if (!el) throw new Error(`없는 곳: ${sel}`);
-      const box = el.closest('.sheet-body, dialog[open]');
-      if (box && box.scrollHeight > box.clientHeight) box.scrollTop += el.getBoundingClientRect().top - offset;
-      else window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - offset);
-    },
-    [sel, offset],
-  );
-  await page.waitForTimeout(250);
-}
-
 async function switchAccount(page, name, hash) {
   await page.evaluate(async (name) => {
     const db = await import('/js/db.js');
     await db.switchAccount(db.listAccounts().find((a) => a.name === name).id);
   }, name);
-  await page.goto(page.url().replace(/#.*$/, hash));
-  await page.reload();
-  await page.waitForSelector('body:not(.booting)');
-  await settle(page);
-}
-
-/** 예시 함께 읽기 방(manual-env.mjs)에 '나'로 들어간 뒤 hash 화면을 다시 연다 */
-async function joinDemoRoom(page, hash = '#/') {
-  await page.evaluate(async (code) => {
-    const rooms = await import('/js/rooms.js');
-    await rooms.joinRoom(await rooms.lookupRoom(code), '정은혜');
-  }, ROOM_CODE);
   await page.goto(page.url().replace(/#.*$/, hash));
   await page.reload();
   await page.waitForSelector('body:not(.booting)');
@@ -662,33 +642,6 @@ const SHOT_LIST = [
 const args = process.argv.slice(2);
 const only = args.includes('--only') ? new Set(args[args.indexOf('--only') + 1].split(',')) : null;
 const pdfOnly = args.includes('--pdf');
-
-// 헤드리스 크롬에는 휴대폰의 공유 창, 알림 허용, 한국어 음성이 없어서 흉내 낸다(화면이 휴대폰과 같게 보이도록)
-function deviceStubs() {
-  Object.defineProperty(navigator, 'share', { value: async () => {}, configurable: true });
-  Object.defineProperty(navigator, 'canShare', { value: () => true, configurable: true });
-  if (window.Notification) {
-    Object.defineProperty(Notification, 'permission', { get: () => 'granted', configurable: true });
-    Notification.requestPermission = async () => 'granted';
-  }
-  const voices = [
-    { name: '유나', lang: 'ko-KR', localService: true, voiceURI: 'ko-yuna', default: true },
-    { name: 'Google 한국의', lang: 'ko-KR', localService: false, voiceURI: 'ko-google', default: false },
-  ];
-  if (window.speechSynthesis) {
-    window.SpeechSynthesisUtterance = class {
-      constructor(text) {
-        this.text = text;
-      }
-    };
-    const synth = window.speechSynthesis;
-    synth.getVoices = () => voices;
-    synth.speak = (u) => setTimeout(() => u.onstart?.(), 0); // 끝나지 않는다: 읽는 중인 화면
-    synth.cancel = () => {};
-    synth.pause = () => {};
-    synth.resume = () => {};
-  }
-}
 
 async function takeShots() {
   const SQL = await createRequire(import.meta.url)('sql.js')();

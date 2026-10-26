@@ -409,6 +409,7 @@ app/                  배포할 정적 사이트 (PWA)
   data/bsb/books/     BSB 본문 (책마다 JSON, 형식은 새번역과 같다)
   img/cards/          말씀 카드 배경 그림 (1080×1920 WebP, thumb/ 작은 그림, index.json 주제 목록)
   docs/user-manual.pdf 사용설명서 (설정 화면에서 연다, npm run manual로 만든다)
+  landing/            소개 페이지 (/landing/). 화면 사진 img/*.webp와 그래프 자료 split.json은 npm run landing으로 만든다
 server/
   sync-server.mjs     기기 간 동기화 서버 (PostgreSQL)
   push.mjs            읽기 알림: 구독 받기, 시각에 맞춰 웹 푸시 보내기
@@ -422,6 +423,7 @@ scripts/
   backgrounds.mjs     말씀 카드 배경 그림 만들기 (이미지 AI)
   serve.mjs           개발용 정적 서버
   manual.mjs          사용설명서 PDF 만들기 (화면 찍기, lib/manual-demo.mjs 예시 기록, lib/manual-env.mjs 브라우저)
+  landing.mjs         소개 페이지의 화면 사진과 "고르게 나누기" 그래프 자료 만들기 (사용설명서와 같은 예시 기록)
 docs/manual/          사용설명서 글(manual.html)과 꾸밈(manual.css)
 test/                 node:test 테스트
 ```
@@ -433,6 +435,10 @@ test/                 node:test 테스트
   검색 결과에 사이트 이름이 "맛있는만나"로 나오게 합니다.
 - 앱이 뜨기 전 화면(`<main>` 안의 `.boot`)과 `<noscript>`에 앱 이름과 소개가 들어 있어,
   자바스크립트를 실행하지 않는 검색 로봇도 내용을 읽습니다.
+- 소개 페이지 `app/landing/index.html`(`https://delicious-manna.com/landing/`)은 앱을 띄우지 않는 정적 페이지라
+  검색 로봇이 그대로 읽습니다. 자기 canonical·Open Graph와 자주 묻는 질문 구조화 데이터(`FAQPage`)가 있으며, 질문을 고치면
+  `<head>`의 JSON-LD도 함께 고칩니다. 화면 사진과 그래프 자료(성경 전체 1년 계획을 장 수로 나눈 것과 견준 하루 분량)는
+  `npm run landing`으로 다시 만듭니다(앱 화면이나 `planner.js`를 바꿨을 때). `/landing`은 nginx가 `/landing/`으로 보냅니다.
 - `app/robots.txt`는 `/api/`만 막고 `sitemap.xml`을 알려 줍니다. 화면을 그리는 데 필요한 `js/`, `data/`, `vendor/`는 막지 않습니다.
 - 링크 미리보기 그림(`icons/og-image.png`, 1200×630)과 `favicon.ico`는 `npm run icons`로 만듭니다.
 - 첫 화면이 빨리 뜨도록 `index.html`에서 sql.js wasm과 `data/index.json`을 `<link rel="preload">`로 미리 받고,

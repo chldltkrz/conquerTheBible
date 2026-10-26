@@ -172,7 +172,8 @@ async function networkFirst(request) {
   } catch (err) {
     const hit = await cache.match(request, { ignoreSearch: true });
     if (hit) return hit;
-    if (request.mode === 'navigate') {
+    // 앱 화면이면 앱(index.html)을 띄운다. 소개 페이지(landing/)는 앱이 아니라서 그러지 않는다
+    if (request.mode === 'navigate' && !new URL(request.url).pathname.startsWith(new URL('landing/', self.registration.scope).pathname)) {
       const shell = await cache.match('index.html');
       if (shell) return shell;
     }

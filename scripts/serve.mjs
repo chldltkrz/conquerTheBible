@@ -61,6 +61,12 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (pathname.endsWith('/')) file = path.join(file, 'index.html');
+  else if (fs.statSync(file, { throwIfNoEntry: false })?.isDirectory()) {
+    // nginx처럼 폴더 주소는 /로 끝나는 주소로 보낸다 (/landing → /landing/)
+    const [raw, query] = req.url.split('?');
+    res.writeHead(301, { Location: `${raw}/${query == null ? '' : `?${query}`}` }).end();
+    return;
+  }
 
   fs.stat(file, (err, stat) => {
     if (err || !stat.isFile()) {

@@ -1,5 +1,5 @@
 // 사용설명서 화면 사진을 찍는 환경: 앱을 띄우는 임시 서버, 휴대폰 크기의 헤드리스 크롬, 화면 위의 빨간 번호 표시.
-// scripts/manual.mjs가 쓴다.
+// scripts/manual.mjs(사용설명서)와 scripts/landing.mjs(소개 페이지)가 쓴다.
 //
 // - 서버는 app/를 그대로 내보내고, /api/는 가짜로 답한다(운영 동기화 서버에 닿지 않도록). 예시 기록은 /__demo/<이름>.sqlite.
 //   함께 읽기 방은 예시 기록의 '나'와 같은 계획(사복음서 한 달)을 읽는 "사랑구역" 방 하나가 있는 것처럼 답한다.
@@ -242,4 +242,66 @@ export async function shoot(page, file, marks = []) {
   await addMarks(page, marks);
   await page.screenshot({ path: file, type: 'jpeg', quality: 82 });
   await page.evaluate(() => document.getElementById('__marks')?.remove());
+}
+
+// ── 화면에서 하는 일 ──────────────────────────────────────
+
+export async function click(page, sel, text) {
+  const loc = text ? page.locator(sel, { hasText: text }).first() : page.locator(sel).first();
+  await loc.click();
+  await settle(page, 450);
+}
+
+/** sel이 화면 위에서 offset(px) 아래에 오도록 스크롤한다. 열린 창이 있으면 창 안을 스크롤한다 */
+export async function scrollTo(page, sel, offset = 90) {
+  await page.evaluate(
+    ([sel, offset]) => {
+      const el = document.querySelector(sel);
+      if (!el) throw new Error(`없는 곳: ${sel}`);
+      const box = el.closest('.sheet-body, dialog[open]');
+      if (box && box.scrollHeight > box.clientHeight) box.scrollTop += el.getBoundingClientRect().top - offset;
+      else window.scrollTo(0, el.getBoundingClientRect().top + window.scrollY - offset);
+    },
+    [sel, offset],
+  );
+  await page.waitForTimeout(250);
+}
+
+/** 예시 함께 읽기 방(위의 가짜 /api)에 '나'로 들어간 뒤 hash 화면을 다시 연다 */
+export async function joinDemoRoom(page, hash = '#/') {
+  await page.evaluate(async (code) => {
+    const rooms = await import('/js/rooms.js');
+    await rooms.joinRoom(await rooms.lookupRoom(code), '정은혜');
+  }, ROOM_CODE);
+  await page.goto(page.url().replace(/#.*$/, hash));
+  await page.reload();
+  await page.waitForSelector('body:not(.booting)');
+  await settle(page);
+}
+
+// 헤드리스 크롬에는 휴대폰의 공유 창, 알림 허용, 한국어 음성이 없어서 흉내 낸다(화면이 휴대폰과 같게 보이도록)
+export function deviceStubs() {
+  Object.defineProperty(navigator, 'share', { value: async () => {}, configurable: true });
+  Object.defineProperty(navigator, 'canShare', { value: () => true, configurable: true });
+  if (window.Notification) {
+    Object.defineProperty(Notification, 'permission', { get: () => 'granted', configurable: true });
+    Notification.requestPermission = async () => 'granted';
+  }
+  const voices = [
+    { name: '유나', lang: 'ko-KR', localService: true, voiceURI: 'ko-yuna', default: true },
+    { name: 'Google 한국의', lang: 'ko-KR', localService: false, voiceURI: 'ko-google', default: false },
+  ];
+  if (window.speechSynthesis) {
+    window.SpeechSynthesisUtterance = class {
+      constructor(text) {
+        this.text = text;
+      }
+    };
+    const synth = window.speechSynthesis;
+    synth.getVoices = () => voices;
+    synth.speak = (u) => setTimeout(() => u.onstart?.(), 0); // 끝나지 않는다: 읽는 중인 화면
+    synth.cancel = () => {};
+    synth.pause = () => {};
+    synth.resume = () => {};
+  }
 }
