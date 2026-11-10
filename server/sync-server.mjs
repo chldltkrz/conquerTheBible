@@ -6,8 +6,9 @@
 // 다음부터 받아 간다. 같은 줄을 두 기기가 고치면 서버에 나중에 도착한 쪽이 남는다.
 // 동기화 코드는 만들 때 한 번만 알려 주고, 서버에는 SHA-256 해시만 둔다.
 //
-//   POST   /api/sync/spaces   새 동기화 공간 → {code}
-//   GET    /api/sync/space    공간 요약: 연결하기 전에 보여 줄 계정 이름과 개수
+//   POST   /api/sync/spaces   새 동기화 공간 → {code, tables}
+//   GET    /api/sync/space    공간 요약: 연결하기 전에 보여 줄 계정 이름과 개수 → {accounts, counts, updatedAt, tables}
+//                              (tables: 아래 /api/sync의 tables와 같다. 기기가 첫 요청부터 모든 표를 보내도록 미리 알려 준다)
 //   DELETE /api/sync/space    공간과 그 기록을 모두 지운다
 //   POST   /api/sync          {v, cursor, replace?, full?, changes: [{t, k, d}]} → {cursor, more, rows: [{t, k, d}], tables}
 //                              (tables: 받는 표 이름들. 기기는 여기 든 표만 보낸다)
@@ -178,7 +179,7 @@ export function createHandler(
         'INSERT INTO sync_spaces (code_hash) VALUES ($1) ON CONFLICT (code_hash) DO NOTHING RETURNING id',
         [hashCode(code)],
       );
-      if (r.rowCount) return { code };
+      if (r.rowCount) return { code, tables: [...TABLES] };
     }
     throw new Error('동기화 코드를 만들지 못했습니다');
   }
@@ -203,7 +204,7 @@ export function createHandler(
         [space.id],
       )
     ).rows.map((r) => r.name);
-    return { accounts, counts, updatedAt: space.updated_at.toISOString() };
+    return { accounts, counts, updatedAt: space.updated_at.toISOString(), tables: [...TABLES] };
   }
 
   async function deleteSpace(code) {

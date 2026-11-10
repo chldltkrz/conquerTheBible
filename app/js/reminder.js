@@ -6,7 +6,7 @@
 
 import { formatSegments, readingMinutes } from './bible.js';
 import { addDays, compareDate, daysBetween, toISO, today } from './dates.js';
-import { getSetting, listAccounts, onWrite, planOn, setSetting, syncInfo } from './db.js';
+import { getSetting, isPaused, listAccounts, onWrite, planOn, setSetting, syncInfo } from './db.js';
 import { fetchLeaving, leaving } from './net.js';
 
 export const DEFAULT_TIME = '21:00';
@@ -189,23 +189,39 @@ async function upload(sub, time, { force = false } = {}) {
   lastSent = signature;
 }
 
+let enabling = false; // 켜는 중: 구독은 만들었지만 설정은 아직 꺼짐이다 (그사이 refreshReminder가 구독을 지우지 않도록)
+
 /** 알림을 켠다. 버튼을 누른 바로 그 자리에서 불러야 한다(알림 허용을 묻는 창은 사용자가 누를 때만 뜬다) */
 export async function enableReminder(time = reminderSetting().time) {
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') throw new ReminderError(permission === 'denied' ? 'denied' : 'dismissed');
-  const sub = await subscription();
-  await upload(sub, time, { force: true });
-  await setSetting('reminder', { on: true, time });
+  enabling = true;
+  try {
+    const sub = await subscription();
+    await upload(sub, time, { force: true });
+    await setSetting('reminder', { on: true, time });
+  } finally {
+    enabling = false;
+  }
 }
 
-/** 알림을 끈다. 서버에 알리지 못해도 구독을 지우면 푸시 서비스가 거절해 서버도 지운다 */
-export async function disableReminder() {
-  await setSetting('reminder', { ...reminderSetting(), on: false });
+/**
+ * 이 기기의 푸시 구독을 서버와 브라우저에서 지운다. 구독이 없으면 아무 일도 없다.
+ * 서버에 알리지 못해도 구독을 지우면 푸시 서비스가 거절해 서버도 지운다.
+ */
+async function dropSubscription() {
   lastSent = null;
-  const sub = await (await navigator.serviceWorker.getRegistration())?.pushManager.getSubscription();
+  if (typeof navigator === 'undefined' || !navigator.serviceWorker) return;
+  const sub = await (await navigator.serviceWorker.getRegistration())?.pushManager?.getSubscription();
   if (!sub) return;
   await request('DELETE', '/subscription', { endpoint: sub.endpoint }).catch(() => {});
   await sub.unsubscribe().catch(() => {});
+}
+
+/** 알림을 끈다 */
+export async function disableReminder() {
+  await setSetting('reminder', { ...reminderSetting(), on: false });
+  await dropSubscription();
 }
 
 /** 알림 시각을 바꾼다 ("HH:MM") */
@@ -228,11 +244,18 @@ export async function testReminder() {
 /**
  * 켜 둔 알림의 구독을 확인하고 내용을 올린다. 그사이 알림 허용을 거둬들였으면 끈다.
  * 구독이 없어졌으면(브라우저가 지움) 묻지 않고 다시 만든다.
+ * 꺼져 있는데 구독이 남아 있으면 지운다: 알림을 켠 채 모든 기록을 지우거나 백업을 가져오면 설정(기록 안에 있다)은
+ * 꺼짐이 되는데 서버에는 구독과 올려 둔 날들이 남아, 설정에는 꺼져 있는데 지운 계획의 알림이 날마다 온다.
+ * (설정 화면이 기록을 통째로 바꾼 뒤에 부르고, 앱을 열 때도 부르므로 이미 그렇게 남은 구독도 지운다)
  */
-async function refresh() {
+export async function refreshReminder() {
   const { on, time } = reminderSetting();
-  if (!on) return;
   try {
+    if (!on) {
+      // 켜는 중이거나, 다른 창에 넘기고 쉬는 중이면(이 창의 설정은 옛것일 수 있다) 구독을 건드리지 않는다
+      if (!enabling && !isPaused()) await dropSubscription();
+      return;
+    }
     if (reminderSupport() !== 'ok' || Notification.permission !== 'granted') {
       await setSetting('reminder', { on: false, time });
       return;
@@ -251,12 +274,12 @@ export function initReminder() {
   onWrite(() => {
     if (!reminderSetting().on) return;
     clearTimeout(uploadTimer);
-    uploadTimer = setTimeout(refresh, UPLOAD_DELAY);
+    uploadTimer = setTimeout(refreshReminder, UPLOAD_DELAY);
   });
   document.addEventListener('visibilitychange', () => {
     // 떠날 때는 기다리던 것을 바로 올리고, 돌아오면 날짜가 바뀌었을 수 있어 다시 올린다
     clearTimeout(uploadTimer);
-    refresh();
+    refreshReminder();
   });
-  refresh();
+  refreshReminder();
 }

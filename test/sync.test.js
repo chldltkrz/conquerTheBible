@@ -271,6 +271,172 @@ test('받은 기록이나 기록을 통째로 바꿔 빠진 함께 읽기 방을
   assert.deepEqual(dropped, ['ABCD-EFGH-JKMN M000000001']);
 });
 
+// ── 서버가 받는 표를 알기 전 (optional 표: 읽기 진도, 함께 읽기 방) ──────────
+
+const ALL_TABLES = SYNC_TABLES.map((t) => t.name);
+const ROOM = 'RRRR-RRRR-RRRR';
+const joinTestRoom = () =>
+  saveRoomMembership({
+    accountId: currentAccount().id,
+    code: ROOM,
+    memberId: 'M000000001',
+    memberKey: 'K'.repeat(26),
+    name: '우리 가족',
+    memberName: '나',
+    kind: 'own',
+    start: oct1,
+  });
+/** 보낼 것에 든 표 이름 (처음 나온 차례대로) */
+const tablesIn = (changes) => [...new Set(changes.map((c) => c.t))];
+
+test('동기화를 시작할 때 이미 있던 읽기 진도와 함께 읽기 방은 버리지 않고, 서버가 받는 표를 들은 뒤에 보낸다', async () => {
+  device();
+  const id = await savePlan(markPlan());
+  await saveReadingProgress(id, 1, 0, { b: 'mrk', c: 1, v: 5 });
+  await joinTestRoom();
+  await syncStart('ABCD-EFGH-JKMN');
+
+  // 첫 요청: 서버가 받는 표를 아직 모른다. 방 줄(계정 바로 다음) 앞에서 끊고 남겨 둔다
+  let sent = syncCollect();
+  assert.deepEqual(tablesIn(sent.changes), ['accounts']);
+  assert.equal(sent.more, true, '이어서 보낼 것이 남았다');
+
+  // 첫 응답이 서버가 받는 표를 알려 주면 나머지를 모두 보낸다
+  await syncApply({ upTo: sent.upTo, rows: [], cursor: 1, replaced: true, tables: ALL_TABLES });
+  sent = syncCollect();
+  assert.equal(sent.more, false);
+  assert.deepEqual(tablesIn(sent.changes), ['room_memberships', 'plans', 'plan_tracks', 'plan_days', 'reading_progress']);
+  await syncApply({ upTo: sent.upTo, rows: [], cursor: 2, tables: ALL_TABLES });
+  assert.equal(syncInfo().pending, 0);
+});
+
+test('표를 알려 주지 않는 예전 서버면 첫 응답 뒤에 그 표의 변경만 버린다', async () => {
+  device();
+  const id = await savePlan(markPlan());
+  await saveReadingProgress(id, 1, 0, { b: 'mrk', c: 1, v: 5 });
+  await syncStart('ABCD-EFGH-JKMN');
+  let sent = syncCollect();
+  assert.deepEqual(tablesIn(sent.changes), ['accounts', 'plans', 'plan_tracks', 'plan_days']);
+  await syncApply({ upTo: sent.upTo, rows: [], cursor: 1, replaced: true });
+  sent = syncCollect();
+  assert.deepEqual(sent.changes, []);
+  assert.equal(sent.more, false);
+  await syncApply({ upTo: sent.upTo, rows: [], cursor: 1 });
+  assert.equal(syncInfo().pending, 0);
+});
+
+test('서버가 받는 표를 알고 시작하면 한 번에 모두 보내고, 방 줄은 계정 바로 다음이다 (통째로 바꾸는 첫 요청에 함께 가도록)', async () => {
+  device();
+  const id = await savePlan(markPlan());
+  await setRead(id, 1, true);
+  await saveReadingProgress(id, 2, 0, { b: 'mrk', c: 2, v: 5 });
+  await joinTestRoom();
+  await syncStart('ABCD-EFGH-JKMN', { tables: ALL_TABLES });
+  const sent = syncCollect();
+  assert.equal(sent.more, false);
+  assert.deepEqual(tablesIn(sent.changes), [
+    'accounts',
+    'room_memberships',
+    'plans',
+    'plan_tracks',
+    'plan_days',
+    'readings',
+    'reading_progress',
+  ]);
+  // 기록이 많아 여러 요청으로 나뉘어도 방 줄은 첫 요청에 든다
+  const first = syncCollect(200);
+  assert.equal(first.more, true);
+  assert.deepEqual(tablesIn(first.changes), ['accounts', 'room_memberships']);
+});
+
+test('동기화 중에 백업을 가져오거나 모두 지워도 서버가 받는 표를 그대로 알아, 방 줄을 통째로 바꾸는 첫 요청에 함께 보낸다', async () => {
+  device();
+  await synced();
+  const id = await savePlan(markPlan());
+  await saveReadingProgress(id, 1, 0, { b: 'mrk', c: 1, v: 5 });
+  await joinTestRoom();
+  await syncApply({ upTo: syncCollect().upTo, rows: [], cursor: 2, tables: ALL_TABLES });
+
+  await importFile(exportBackup());
+  assert.equal(syncInfo().replace, true);
+  const sent = syncCollect();
+  assert.equal(sent.more, false);
+  assert.deepEqual(tablesIn(sent.changes), ['accounts', 'room_memberships', 'plans', 'plan_tracks', 'plan_days', 'reading_progress']);
+});
+
+/**
+ * 가짜 동기화 서버 (server/sync-server.mjs의 sync와 같은 규칙: 줄마다 마지막 값과 번호, replace, cursor).
+ * 새 공간을 만든 응답은 지금 배포된 서버처럼 받는 표를 알려 주지 않고, 주고받는 응답에서만 알려 준다.
+ */
+function fakeSyncServer() {
+  const space = { version: 0, rows: new Map() };
+  const exchange = (body) => {
+    const before = space.version;
+    let version = before;
+    if (body.replace) {
+      for (const r of space.rows.values()) {
+        if (r.d !== null) Object.assign(r, { d: null, version: ++version });
+      }
+    }
+    for (const c of body.changes) space.rows.set(`${c.t} ${c.k}`, { ...c, version: ++version });
+    const out =
+      !body.replace && body.cursor < before
+        ? [...space.rows.values()].filter((r) => r.version > body.cursor && r.version <= before).sort((a, b) => a.version - b.version)
+        : [];
+    space.version = version;
+    return { cursor: version, more: false, rows: out.map(({ t, k, d }) => ({ t, k, d })), tables: ALL_TABLES };
+  };
+  const json = (status, body) => new Response(JSON.stringify(body), { status });
+  return {
+    /** 서버에 값이 든(지우지 않은) 그 표의 줄 수 */
+    count: (table) => [...space.rows.values()].filter((r) => r.t === table && r.d).length,
+    fetch: async (url, init) =>
+      url.endsWith('/spaces') ? json(201, { code: 'ABCD-EFGH-JKMN' }) : json(200, exchange(JSON.parse(init.body))),
+  };
+}
+
+test('주고받기: 동기화를 시작할 때 있던 진도·방도 다른 기기로 가고, 연결한 직후 적은 진도도 가며, 동기화 중에 백업을 가져와도 다른 기기가 방에서 빠지지 않는다', async () => {
+  const fake = fakeSyncServer();
+  const dropped = [];
+  onRoomsDropped((list) => dropped.push(...list.map((m) => `${m.code} ${m.memberId}`)));
+  configureSync({ url: 'http://sync.test/api/sync', fetch: fake.fetch });
+  try {
+    // a: 계획을 읽다가, 방에 들어간 채로 동기화를 시작한다
+    const a = device();
+    const id = await savePlan(markPlan());
+    await saveReadingProgress(id, 1, 0, { b: 'mrk', c: 1, v: 5 });
+    await joinTestRoom();
+    await startNewSync();
+    assert.equal(syncInfo().pending, 0);
+    assert.equal(fake.count('room_memberships'), 1, '시작할 때 있던 방');
+    assert.equal(fake.count('reading_progress'), 1, '시작할 때 있던 읽기 진도');
+
+    // b: 코드로 연결해 받고, 첫 주고받기 전에 바로 읽기 시작한다
+    const b = device();
+    await joinSync('ABCD-EFGH-JKMN', 'server');
+    assert.deepEqual(roomMemberships().map((m) => m.code), [ROOM]);
+    const plan = planOn(oct1);
+    assert.equal(plan.days[0].parts[0].progress.v, 5);
+    await saveReadingProgress(plan.id, 2, 0, { b: 'mrk', c: 2, v: 7 });
+    await sync(b);
+    assert.equal(fake.count('reading_progress'), 2, '연결한 직후 적은 진도');
+
+    // a: 동기화 중에 백업을 가져온다 (서버 기록을 통째로 바꾼다)
+    a.use();
+    await importFile(exportBackup());
+    a.keepCurrent();
+    await sync(a);
+    assert.equal(fake.count('room_memberships'), 1, '방 줄도 다시 올라갔다');
+
+    // b: 받아도 방은 그대로다 (지운 줄만 받으면 방에서 나가 버린다)
+    await sync(b);
+    assert.deepEqual(roomMemberships().map((m) => m.code), [ROOM]);
+    assert.deepEqual(dropped, []);
+  } finally {
+    configureSync({ url: server ? `${server.url}/api/sync` : 'api/sync', fetch: (...args) => fetch(...args) });
+  }
+});
+
 // ── 서버와 주고받기 ────────────────────────────────────────
 
 let server = null;
@@ -384,6 +550,30 @@ t('하루 분량을 어디까지 읽었는지도 다른 기기로 간다', async
   await sync(b);
   const p = planOn(oct1).days[0].parts[0].progress;
   assert.deepEqual([p.b, p.c, p.v], ['mrk', 1, 20]);
+});
+
+t('동기화를 시작할 때 이미 있던 읽기 진도와 함께 읽기 방도 다른 기기로 가고, 동기화 중에 백업을 가져와도 다른 기기의 방은 그대로다', async (ctx) => {
+  if (skip) return ctx.skip(skip);
+  const dropped = [];
+  onRoomsDropped((list) => dropped.push(...list.map((m) => m.code)));
+  const a = device();
+  const id = await savePlan(markPlan());
+  await saveReadingProgress(id, 1, 0, { b: 'mrk', c: 1, v: 20 });
+  await joinTestRoom();
+  const b = device();
+  const code = await pair(a, b);
+  assert.deepEqual(roomMemberships().map((m) => m.code), [ROOM]);
+  assert.equal(planOn(oct1).days[0].parts[0].progress.v, 20);
+  // 코드를 확인할 때도 서버가 받는 표를 알려 준다 (이 기기 기록을 남기며 연결할 때 첫 요청부터 모든 표를 보낸다)
+  assert.ok((await lookupSync(code)).tables.includes('room_memberships'));
+
+  a.use();
+  await importFile(exportBackup());
+  a.keepCurrent();
+  await sync(a);
+  await sync(b);
+  assert.deepEqual(roomMemberships().map((m) => m.code), [ROOM]);
+  assert.deepEqual(dropped, []);
 });
 
 t('읽던 계획을 고쳐 저장해도 다른 기기에 읽음 기록이 이어진다', async (ctx) => {

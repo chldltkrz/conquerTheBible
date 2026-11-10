@@ -5,8 +5,8 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { useIndex } from '../app/js/bible.js';
 import { addDays } from '../app/js/dates.js';
-import { createAccount, listPlans, savePlan, setRead, switchAccount, useMemoryDatabase } from '../app/js/db.js';
-import { reminderDays, timeLabel } from '../app/js/reminder.js';
+import { createAccount, listPlans, resetAll, savePlan, setRead, setSetting, switchAccount, useMemoryDatabase } from '../app/js/db.js';
+import { configureReminder, refreshReminder, reminderDays, reminderSetting, timeLabel } from '../app/js/reminder.js';
 
 const INDEX_PATH = new URL('../app/data/index.json', import.meta.url);
 const skip = !fs.existsSync(INDEX_PATH) && 'app/data/index.json 없음';
@@ -80,4 +80,49 @@ test('알림 시각 표시', () => {
   assert.equal(timeLabel('09:05'), '오전 9시 5분');
   assert.equal(timeLabel('12:00'), '오후 12시');
   assert.equal(timeLabel('21:30'), '오후 9시 30분');
+});
+
+/** 브라우저의 서비스 워커·푸시 구독 흉내. sub가 null이면 구독이 없다 */
+function fakeBrowser(endpoint) {
+  const browser = {
+    unsubscribed: 0,
+    sub: { endpoint, unsubscribe: async () => ((browser.unsubscribed += 1), (browser.sub = null), true) },
+  };
+  const registration = { pushManager: { getSubscription: async () => browser.sub } };
+  const before = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { serviceWorker: { getRegistration: async () => registration } },
+  });
+  browser.restore = () => (before ? Object.defineProperty(globalThis, 'navigator', before) : delete globalThis.navigator);
+  return browser;
+}
+
+test('알림을 켠 채 모든 기록을 지우면(설정이 꺼짐이 된다) 남은 구독을 서버와 브라우저에서 지운다', async () => {
+  useMemoryDatabase(new SQL.Database(), SQL);
+  const calls = [];
+  configureReminder({
+    url: 'http://push.test/api/push',
+    fetch: async (url, init) => {
+      calls.push([init.method, url.replace('http://push.test', ''), init.body && JSON.parse(init.body)]);
+      return new Response(null, { status: 204 });
+    },
+  });
+  const endpoint = 'https://fcm.googleapis.com/fcm/send/abc';
+  const browser = fakeBrowser(endpoint);
+  try {
+    await setSetting('reminder', { on: true, time: '21:00' });
+    await resetAll();
+    assert.equal(reminderSetting().on, false, '설정도 함께 지워졌다');
+    await refreshReminder();
+    assert.deepEqual(calls, [['DELETE', '/api/push/subscription', { endpoint }]]);
+    assert.equal(browser.unsubscribed, 1);
+
+    // 남은 구독이 없으면 아무 요청도 하지 않는다
+    calls.length = 0;
+    await refreshReminder();
+    assert.deepEqual(calls, []);
+  } finally {
+    browser.restore();
+  }
 });

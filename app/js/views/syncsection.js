@@ -229,7 +229,7 @@ async function connect(remote, done) {
     if (!keep) return;
   }
   try {
-    await joinSync(remote.code, keep);
+    await joinSync(remote.code, keep, { tables: remote.tables });
     track('sync_started', { how: keep === 'server' ? 'join' : 'join_keep_device' });
     toast(keep === 'server' ? '동기화된 기록을 받았습니다' : '이 기기 기록으로 동기화를 시작했습니다');
     done();

@@ -353,18 +353,33 @@ async function fetchRoom(m) {
 }
 
 let refreshing = null;
+let refreshingFor = null; // 지금 방 소식을 받고 있는 계정
+let refreshAgain = false;
 
-/** 지금 계정이 들어간 방들의 소식을 새로 받는다. 받으면 'rooms-updated' */
+/**
+ * 지금 계정이 들어간 방들의 소식을 새로 받는다. 받으면 'rooms-updated'.
+ * 받는 사이 계정을 바꿨으면 끝난 뒤 새 계정의 방을 한 번 더 받는다
+ * (그러지 않으면 새 계정의 방은 다음 1분 주기까지 "방 소식을 받는 중"으로 남는다).
+ */
 export function refreshRooms() {
-  refreshing ??= (async () => {
+  if (refreshing) {
+    if (refreshingFor != null && currentAccount().id !== refreshingFor) refreshAgain = true;
+    return refreshing;
+  }
+  refreshing = (async () => {
     await null; // 할 일 없이 바로 끝나도 finally가 refreshing에 대입된 뒤에 비우도록 한 박자 쉰다
     try {
-      const list = roomMemberships(currentAccount().id).filter((m) => isRoomActive(m));
-      if (!list.length) return;
-      await Promise.all(list.map(fetchRoom));
-      notify('rooms-updated');
+      do {
+        refreshAgain = false;
+        refreshingFor = currentAccount().id;
+        const list = roomMemberships(refreshingFor).filter((m) => isRoomActive(m));
+        if (!list.length) continue;
+        await Promise.all(list.map(fetchRoom));
+        notify('rooms-updated');
+      } while (refreshAgain);
     } finally {
       refreshing = null;
+      refreshingFor = null;
     }
   })();
   return refreshing;

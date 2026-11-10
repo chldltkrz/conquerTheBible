@@ -28,6 +28,7 @@ import { handleReminderAction, handleReminderChange, reminderSection } from './r
 import { openExportSheet } from './exportsheet.js';
 import { handleRoomAction, openRoomSheet, roomSection } from './roomsection.js';
 import { followAccountRename, leaveAccountRooms } from '../rooms.js';
+import { refreshReminder } from '../reminder.js';
 import { chosenTheme, currentTheme, setTheme } from '../theme.js';
 
 const THEMES = [
@@ -448,6 +449,7 @@ export async function settingsView(root, _params, { isCurrent }) {
       await leaveAccountRooms(null); // 들어간 함께 읽기 방에서 먼저 나온다 (안 되면 그냥 지운다)
       await resetAll();
       applyReadingSettings();
+      refreshReminder(); // 알림 설정도 지워졌다: 서버에 남은 알림 구독을 지운다 (그러지 않으면 지운 계획의 알림이 계속 온다)
       track('data_reset');
       toast('모든 기록을 지웠습니다');
       render();
@@ -553,6 +555,7 @@ export async function settingsView(root, _params, { isCurrent }) {
     try {
       await importFile(new Uint8Array(await file.arrayBuffer()));
       applyReadingSettings();
+      refreshReminder(); // 알림 설정도 백업의 것으로 바뀌었다: 켜져 있으면 가져온 계획으로 다시 올리고, 꺼져 있으면 남은 구독을 지운다
       track('backup_imported');
       toast('백업을 가져왔습니다');
       render();

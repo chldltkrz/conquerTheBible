@@ -246,6 +246,51 @@ test('방에서 보일 내 이름: 계정 이름이나 예전 기본 이름 "나
   assert.deepEqual(names(), { 'AAAA-ROOM-0001': '기쁜 수달', 'BBBB-ROOM-0002': '김집사' });
 });
 
+test('방 소식을 받는 사이 계정을 바꾸면, 끝난 뒤 새 계정의 방도 받는다', async () => {
+  device();
+  const first = currentAccount().id;
+  const second = await createAccount('둘째');
+  const codes = { [first]: 'AAAA-AAAA-AAAA', [second]: 'BBBB-BBBB-BBBB' };
+  for (const [account, code] of Object.entries(codes)) {
+    await saveRoomMembership({
+      accountId: Number(account),
+      code,
+      memberId: `M${code.slice(0, 4)}00000`,
+      memberKey: 'K'.repeat(26),
+      name: `방 ${code}`,
+      memberName: '나',
+      kind: 'own',
+      start: today(),
+    });
+  }
+  // 가짜 방 서버: 첫 계정의 방은 풀어 줄 때까지 답하지 않는다
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const asked = [];
+  configureRooms({
+    url: 'http://rooms.test/api/rooms',
+    fetch: async (_url, init) => {
+      const code = init.headers.Authorization.replace('Bearer ', '');
+      asked.push(code);
+      if (code === codes[first]) await gate;
+      const member = { id: `M${code.slice(0, 4)}00000`, name: '나', color: '#2f6a55', owner: true, days: {}, progress: null };
+      return new Response(JSON.stringify({ name: `방 ${code}`, plan: { kind: 'own' }, members: [member] }), { status: 200 });
+    },
+  });
+  try {
+    const refreshing = refreshRooms();
+    while (!asked.length) await new Promise((resolve) => setTimeout(resolve, 1));
+    await switchAccount(second);
+    refreshRooms(); // 계정을 바꾸면 부른다 (initRooms의 'account-changed')
+    release();
+    await refreshing;
+    assert.deepEqual(asked, [codes[first], codes[second]]);
+    assert.ok(roomData(codes[second])?.room, '새 계정의 방 소식을 받았다');
+  } finally {
+    configureRooms({ url: server ? `${server.url}/api/rooms` : 'api/rooms', fetch: (...args) => fetch(...args) });
+  }
+});
+
 // ── 서버와 주고받기 ────────────────────────────────────────
 
 let server = null;

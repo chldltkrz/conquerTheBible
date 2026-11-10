@@ -30,6 +30,8 @@ const SMALL_ID = 2 ** 32;
  * since: v6 뒤에 더한 표는 그 표를 만든 마이그레이션 번호. 트리거는 그 마이그레이션에서 만든다(v6는 since가 없는 표만).
  * optional: 서버가 응답의 tables로 이 표를 안다고 알려 줄 때만 보낸다. 모르는 표가 든 요청은 예전 서버가
  *   통째로 거절하므로, 서버를 새로 배포하기 전에도 동기화가 멈추지 않게 한다.
+ *   서버가 받는 표를 아직 듣지 못했으면(sync_state에 'tables'가 없다) 그 변경은 버리지 않고 남겨 두었다가
+ *   첫 응답을 받은 뒤에 보낸다 (syncCollect).
  */
 export const SYNC_TABLES = [
   { name: 'accounts', key: ['id'] },
@@ -1408,12 +1410,13 @@ export async function resetAll() {
 async function replaceDatabase(next) {
   assertWritable();
   const sync = syncInfo();
+  const tables = syncTables(); // 서버가 받는 표는 그대로다: 이어 써야 방 줄도 통째로 바꾸는 첫 요청에 함께 간다
   const members = memberRows();
   db.close();
   db = next;
   db.exec('DELETE FROM sync_state; DELETE FROM sync_outbox;'); // 백업에 남아 있던 동기화 상태는 쓰지 않는다
   loadCurrentAccount();
-  if (sync) await syncStart(sync.code);
+  if (sync) await syncStart(sync.code, { tables });
   else await persist();
   noteDroppedRooms(members);
 }
@@ -1429,6 +1432,13 @@ async function replaceDatabase(next) {
 
 const SYNC_SPEC = new Map(SYNC_TABLES.map((t, order) => [t.name, { ...t, order }]));
 
+// 동기화를 (다시) 시작할 때 보낼 차례: 부모 표부터(SYNC_TABLES)이되 함께 읽기 방은 계정 바로 다음에 둔다.
+// 서버 기록을 통째로 바꾸는 첫 요청은 서버에 있던 줄을 모두 지운 줄로 만든다. 기록이 많아 여러 요청으로 나뉘면
+// 방 줄이 뒤 요청으로 밀리고, 그사이 동기화한 다른 기기는 방 줄이 지워진 것만 받아 방에서 나가 버린다
+// (rooms.js의 onRoomsDropped. 그러면 같은 멤버로 들어가 있던 이 기기도 방에서 빠진다).
+const startRank = (t) => (t.name === 'accounts' ? 0 : t.name === 'room_memberships' ? 1 : 2);
+const START_ORDER = [...SYNC_TABLES].sort((a, b) => startRank(a) - startRank(b));
+
 const syncGet = (key) => one('SELECT value FROM sync_state WHERE key = $k', { $k: key })?.value ?? null;
 
 function syncSet(key, value) {
@@ -1439,6 +1449,20 @@ function syncSet(key, value) {
       String(value),
     ]);
   }
+}
+
+/**
+ * 서버가 받는 표 이름들 (sync_state 'tables'). 서버가 아직 알려 주지 않았으면 null.
+ * 알려 주지 않는 예전 서버의 응답을 받은 뒤에는 빈 배열이다 (optional 표는 보내지 않는다).
+ */
+function syncTables() {
+  const value = syncGet('tables');
+  return value == null ? null : JSON.parse(value);
+}
+
+/** 서버가 알려 준 표를 적는다. 알려 준 것이 없으면(tables가 배열이 아니면) unknown 값으로: null이면 아직 모르는 것 */
+function setSyncTables(tables, unknown) {
+  syncSet('tables', Array.isArray(tables) ? JSON.stringify(tables) : unknown);
 }
 
 /**
@@ -1474,8 +1498,12 @@ export function localSummary() {
  * @returns {{upTo: number, changes: Array<{t, k, d}>, more: boolean}} upTo는 이번에 담은 마지막 outbox 번호
  */
 export function syncCollect(maxChars = 500000) {
-  // 서버가 아직 모르는 표(optional)의 변경은 보내지 않고 버린다 (예전 서버는 요청을 통째로 거절한다).
-  const serverTables = new Set(JSON.parse(syncGet('tables') ?? '[]'));
+  // 서버가 모르는 표(optional)의 변경은 보내지 않고 버린다 (예전 서버는 요청을 통째로 거절한다).
+  // 서버가 받는 표를 아직 듣지 못했으면(동기화를 시작하고 첫 응답을 받기 전) 버리지 않고 그 앞에서 끊는다:
+  // 앞의 것만 보내 첫 응답을 받고, 다음 요청에 이어서 보낸다. 여기서 버리면 동기화를 시작할 때 이미 있던
+  // 읽기 진도와 함께 읽기 방이 서버로 가지 않는다.
+  const known = syncTables();
+  const serverTables = new Set(known ?? []);
   const changes = [];
   const seen = new Set();
   const selects = new Map();
@@ -1487,6 +1515,10 @@ export function syncCollect(maxChars = 500000) {
     while (outbox.step()) {
       const [seq, tbl, key] = outbox.get();
       const spec = SYNC_SPEC.get(tbl);
+      if (spec?.optional && !known) {
+        more = true;
+        break;
+      }
       if (spec && (!spec.optional || serverTables.has(tbl)) && !seen.has(`${tbl} ${key}`)) {
         if (size >= maxChars) {
           more = true;
@@ -1520,7 +1552,7 @@ export function syncCollect(maxChars = 500000) {
  * (more가 false) 부모가 없으면 버린다(다른 기기에서 부모를 지웠다).
  * @param {{upTo?: number, rows: Array<{t, k, d}>, cursor: number, replaced?: boolean, tables?: string[], more?: boolean}} res
  *   replaced: 이번에 보낸 것이 서버 기록을 통째로 바꾸는 요청이었는지
- *   tables: 서버가 받는 표 (예전 서버는 알려 주지 않는다. 그러면 optional 표는 보내지 않는다)
+ *   tables: 서버가 받는 표 (예전 서버는 알려 주지 않는다. 그러면 optional 표는 보내지 않는다: 빈 목록으로 적는다)
  *   more: 서버에 아직 받을 줄이 남았는지
  * @returns {Promise<boolean>} 받은 줄로 기록이 바뀌었으면 true (화면을 다시 그린다)
  */
@@ -1529,7 +1561,7 @@ export async function syncApply({ upTo = 0, rows, cursor, replaced = false, tabl
   const changed = await write(() => {
     db.run('DELETE FROM sync_outbox WHERE seq <= ?', [upTo]);
     if (replaced) syncSet('replace', null);
-    syncSet('tables', Array.isArray(tables) ? JSON.stringify(tables) : null);
+    setSyncTables(tables, '[]');
     const pending = new Set(all('SELECT tbl, key FROM sync_outbox').map((r) => `${r.tbl} ${r.key}`));
     // 미뤄 둔 줄을 받은 줄과 함께 넣는다 (같은 줄이 새로 왔으면 새 것)
     const incoming = new Map();
@@ -1553,13 +1585,15 @@ export function syncResetCursor() {
 
 /**
  * 이 기기의 기록을 서버 기록으로 통째로 바꾸고 동기화를 시작한다. (다른 기기의 코드로 연결하며 그쪽 기록을 받을 때)
- * rows는 서버의 모든 줄(cursor 0부터 받은 것), cursor는 그 마지막 번호.
+ * rows는 서버의 모든 줄(cursor 0부터 받은 것), cursor는 그 마지막 번호, tables는 그 응답이 알려 준 서버가 받는 표
+ * (없으면 아직 모르는 것으로 두고 첫 주고받기에서 듣는다).
  */
-export async function syncAdopt({ code, rows, cursor }) {
+export async function syncAdopt({ code, rows, cursor, tables = null }) {
   const members = memberRows();
   await write(() => {
     db.run('DELETE FROM sync_outbox');
     syncSet('deferred', null);
+    setSyncTables(tables, null);
     syncSet('tracking', null);
     for (const t of [...SYNC_TABLES].reverse()) db.run(`DELETE FROM ${t.name}${t.only ? ` WHERE ${t.only(t.name)}` : ''}`);
     const { failed } = applyRows(rows.filter((r) => r.d)); // 모두 받은 뒤라 부모가 없는 줄은 버린다
@@ -1582,9 +1616,10 @@ export async function syncAdopt({ code, rows, cursor }) {
  * 서버가 나중에 받기 시작한 표(optional)는 지우지 않는다: 예전 서버에 보내지 못하고 이 기기에만 남은 줄일 수 있다.
  * @returns {Promise<boolean>} 기록이 바뀌었으면 true
  */
-export async function syncReconcile({ rows, cursor }) {
+export async function syncReconcile({ rows, cursor, tables = null }) {
   const members = memberRows();
   const changed = await write(() => {
+    if (Array.isArray(tables)) setSyncTables(tables);
     const pending = new Set(all('SELECT tbl, key FROM sync_outbox').map((r) => `${r.tbl} ${r.key}`));
     const onServer = new Set(rows.filter((r) => r.d).map((r) => `${r.t} ${r.k}`));
     let removed = 0;
@@ -1617,16 +1652,18 @@ export async function syncReconcile({ rows, cursor }) {
 /**
  * 이 기기의 기록으로 동기화를 시작한다: 다음에 보낼 때 서버 기록을 이 기기 기록으로 통째로 바꾼다.
  * (새 동기화 코드를 만들 때, 다른 기기의 코드로 연결하며 이 기기 기록을 남길 때, 동기화 중에 백업을 가져오거나 모두 지울 때)
+ * tables: 서버가 받는 표를 이미 알면 그 이름들 (새 코드를 만든 응답, 다시 시작하기 전에 알던 것). 모르면 첫 응답에서 듣는다.
  */
-export async function syncStart(code) {
+export async function syncStart(code, { tables = null } = {}) {
   assertWritable();
   rekeyLocalIds();
   await write(() => {
     db.run('DELETE FROM sync_outbox');
-    for (const { name, key, only } of SYNC_TABLES) {
+    for (const { name, key, only } of START_ORDER) {
       const where = only ? ` WHERE ${only(name)}` : '';
       db.run(`INSERT INTO sync_outbox (tbl, key) SELECT '${name}', json_array(${key.join(', ')}) FROM ${name}${where}`);
     }
+    setSyncTables(tables, null);
     syncSet('deferred', null);
     syncSet('code', code);
     syncSet('cursor', 0);

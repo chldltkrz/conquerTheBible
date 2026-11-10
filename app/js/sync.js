@@ -209,7 +209,10 @@ async function exchange() {
   }
 }
 
-/** 서버의 모든 줄을 cursor 0부터 받는다 → {rows, cursor}. full: 정리한 지운 줄이 있어도 받는다 */
+/**
+ * 서버의 모든 줄을 cursor 0부터 받는다 → {rows, cursor, tables}. full: 정리한 지운 줄이 있어도 받는다
+ * tables: 서버가 받는 표 (예전 서버는 알려 주지 않는다)
+ */
 async function fetchAll(code) {
   const rows = [];
   let cursor = 0;
@@ -217,7 +220,7 @@ async function fetchAll(code) {
     const res = await request('POST', '', code, { v: PROTOCOL, cursor, full: true, changes: [] });
     for (const r of res.rows) rows.push(r);
     cursor = res.cursor;
-    if (!res.more) return { rows, cursor };
+    if (!res.more) return { rows, cursor, tables: res.tables };
   }
 }
 
@@ -277,13 +280,14 @@ export function initSync() {
 
 /** 새 동기화 코드를 만들고 이 기기 기록을 올린다. 코드를 돌려준다 */
 export async function startNewSync() {
-  const { code } = await request('POST', '/spaces');
-  await syncStart(code);
+  // tables: 서버가 받는 표. 알려 주지 않는 서버면 첫 응답에서 듣는다 (그때까지 optional 표의 줄은 남겨 둔다)
+  const { code, tables } = await request('POST', '/spaces');
+  await syncStart(code, { tables });
   await syncNow();
   return code;
 }
 
-/** 다른 기기의 코드가 맞는지 확인하고 그 동기화 기록 요약을 받는다 {code, accounts, counts, updatedAt} */
+/** 다른 기기의 코드가 맞는지 확인하고 그 동기화 기록 요약을 받는다 {code, accounts, counts, updatedAt, tables?} */
 export async function lookupSync(input) {
   const code = normalizeCode(input);
   if (!code) throw new SyncError('bad_code');
@@ -294,16 +298,17 @@ export async function lookupSync(input) {
  * 코드로 연결한다.
  *   keep 'server': 이 기기 기록을 동기화된 기록으로 바꾼다
  *   keep 'device': 동기화된 기록(과 다른 기기들의 기록)을 이 기기 기록으로 바꾼다
+ * tables: lookupSync가 받은 서버가 받는 표 (이 기기 기록을 남길 때, 방 줄까지 첫 요청에 함께 보내는 데 쓴다. 없어도 된다)
  */
-export async function joinSync(code, keep) {
+export async function joinSync(code, keep, { tables = null } = {}) {
   if (keep === 'device') {
-    await syncStart(code);
+    await syncStart(code, { tables });
     await syncNow();
     return;
   }
   // 모두 받은 뒤에 한 번에 바꾼다 (받는 중에 끊겨도 이 기기 기록은 그대로)
-  const { rows, cursor } = await fetchAll(code);
-  await syncAdopt({ code, rows, cursor });
+  const all = await fetchAll(code);
+  await syncAdopt({ code, ...all });
   setStatus('ok');
   notify('sync-applied');
 }

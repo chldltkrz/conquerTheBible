@@ -93,6 +93,12 @@ const modeArt = (lanes) => html`<span class="mode-art" aria-hidden="true">
 
 /** 주소: #/new (이번 달), #/new/2026-10 (그 달), #/new/2026-10-15/2026-11-23 (기간을 정해서) */
 export async function newPlanView(root, [y, m, d, y2, m2, d2], { isCurrent = () => true } = {}) {
+  // 13월처럼 없는 달이면(주소를 직접 고친 경우) 이번 달로 연다. 그대로 저장하면 시작일이 '2026-13-01'이 되어
+  // 어느 날짜에도 걸리지 않는 계획이 생긴다. (날짜까지 있는 주소는 아래에서 실제 날짜로 맞춘다)
+  if (y != null && d == null && !(m >= 1 && m <= 12)) {
+    location.replace('#/new');
+    return;
+  }
   const now = today();
   // 주소에 기간이 없고(#/new) 이번 달이 비어 있으면, 달 중간에는 지난 날짜가 "밀림"으로 쌓이지 않게 오늘부터 시작한다.
   if (y == null && !plansOverlapping(monthStart(now.y, now.m), monthEnd(now.y, now.m)).length) {
